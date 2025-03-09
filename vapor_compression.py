@@ -50,6 +50,8 @@ class SimpleVaporCompressionCycle:
         assert 0 < compressor_efficiency < 1, "Compressor efficiency must be between 0 and 1"
         self.compressor_efficiency = compressor_efficiency
         
+        self._define_flowsheet()
+
 
     def _define_flowsheet(self):
 
@@ -211,9 +213,9 @@ class SimpleVaporCompressionCycle:
                            evaporator_temperature = (-20, 0),
                            compressor_temperature = None,
                            condenser_temperature = (30, 50),
-                           expansion_valve_temperature = None,
-                           compressor_efficiency = 0.85):
+                           expansion_valve_temperature = None):
         
+        C_to_K = 273.15
 
         ## Unfix the conditions from initialization
         self.unit_operations = [self.model.fs.evaporator, self.model.fs.compressor, self.model.fs.condenser, self.model.fs.expansion_valve]
@@ -231,22 +233,29 @@ class SimpleVaporCompressionCycle:
             unit.inlet.vapor_frac[0].setlb(0)
             unit.inlet.vapor_frac[0].setub(1)
 
-        if len(low_side_pressure) == 2:
-            low_side_pressure_min = low_side_pressure[0]
-            low_side_pressure_max = low_side_pressure[1]
+        # Convert pressures from kPa to Pa
+        if not None and len(low_side_pressure) == 2:
+            low_side_pressure_min = low_side_pressure[0]*1000
+            low_side_pressure_max = low_side_pressure[1]*1000
         else:
             low_side_pressure_min = None
             low_side_pressure_max = None
 
-        if len(high_side_pressure) == 2:
-            high_side_pressure_min = high_side_pressure[0]
-            high_side_pressure_max = high_side_pressure[1]
+        if not None and len(high_side_pressure) == 2:
+            high_side_pressure_min = high_side_pressure[0]*1000
+            high_side_pressure_max = high_side_pressure[1]*1000
         else:
             high_side_pressure_min = None
             high_side_pressure_max = None
 
         # Set mass flowrate to 1 kg/s because we only care about thermodynamic efficiency
         self.model.fs.evaporator.inlet.flow_mass[0].fix(1)
+
+        def check_input(bounds):
+            if bounds is not None and len(bounds) == 2:
+                return True
+            else:
+                return False
 
         ## Evaporator
 
@@ -257,12 +266,12 @@ class SimpleVaporCompressionCycle:
             self.model.fs.evaporator.inlet.pressure[0].setub(low_side_pressure_max)
 
         # Evaporator temperature bounds (outlet)
-        if len(evaporator_temperature) == 2:
+        if check_input(evaporator_temperature):
             if evaporator_temperature[0]:
-                self.model.fs.evaporator.outlet.temperature[0].setlb(evaporator_temperature[0])
+                self.model.fs.evaporator.outlet.temperature[0].setlb(evaporator_temperature[0] + C_to_K)
             
             if evaporator_temperature[1]:
-                self.model.fs.evaporator.outlet.temperature[0].setub(evaporator_temperature[1])
+                self.model.fs.evaporator.outlet.temperature[0].setub(evaporator_temperature[1] + C_to_K)
 
         # Evaporator outlet must be a vapor
         self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
@@ -281,11 +290,11 @@ class SimpleVaporCompressionCycle:
             self.model.fs.compressor.outlet.pressure[0].setub(high_side_pressure_max)
 
         # Compressor temperature bounds (outlet)
-        if len(compressor_temperature) == 2:
+        if check_input(compressor_temperature):
             if compressor_temperature[0]:
-                self.model.fs.compressor.outlet.temperature[0].setlb(compressor_temperature[0])
+                self.model.fs.compressor.outlet.temperature[0].setlb(compressor_temperature[0] + C_to_K)
             if compressor_temperature[1]:
-                self.model.fs.compressor.outlet.temperature[0].setub(compressor_temperature[1])
+                self.model.fs.compressor.outlet.temperature[0].setub(compressor_temperature[1] + C_to_K)
         
         # Compressor outlet must be a vapor
         self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.999)
@@ -304,11 +313,11 @@ class SimpleVaporCompressionCycle:
             self.model.fs.condenser.outlet.pressure[0].setub(high_side_pressure_max)
 
         # Condenser temperature bounds (outlet)
-        if len(condenser_temperature) == 2:
+        if check_input(condenser_temperature):
             if condenser_temperature[0]:
-                self.model.fs.condenser.outlet.temperature[0].setlb(condenser_temperature[0])
+                self.model.fs.condenser.outlet.temperature[0].setlb(condenser_temperature[0]+ C_to_K)
             if condenser_temperature[1]:
-                self.model.fs.condenser.outlet.temperature[0].setub(condenser_temperature[1])
+                self.model.fs.condenser.outlet.temperature[0].setub(condenser_temperature[1]+ C_to_K)
 
         # Condenser outlet must be a liquid
         self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
@@ -326,11 +335,11 @@ class SimpleVaporCompressionCycle:
             self.model.fs.expansion_valve.inlet.pressure[0].setub(high_side_pressure_max)
 
         # Expansion valve temperature bounds (outlet)
-        if len(expansion_valve_temperature) == 2:
+        if check_input(expansion_valve_temperature):
             if expansion_valve_temperature[0]:
-                self.model.fs.expansion_valve.outlet.temperature[0].setlb(expansion_valve_temperature[0])
+                self.model.fs.expansion_valve.outlet.temperature[0].setlb(expansion_valve_temperature[0]+ C_to_K)
             if expansion_valve_temperature[1]:
-                self.model.fs.expansion_valve.outlet.temperature[0].setub(expansion_valve_temperature[1])
+                self.model.fs.expansion_valve.outlet.temperature[0].setub(expansion_valve_temperature[1]+ C_to_K)
 
         # Expansion valve outlet must be two-phase
         self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.001)
@@ -344,6 +353,7 @@ class SimpleVaporCompressionCycle:
         self.logger.info("Initializing the flowsheet by solving with no objective...")
 
         solver = get_solver()
+        solver.options = {'max_iter': 200}
         results = solver.solve(self.model, tee=verbose)
 
         if results.solver.termination_condition == "optimal":
@@ -361,7 +371,7 @@ class SimpleVaporCompressionCycle:
                                 (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
             
         # Solve the optimization problem
-        results = solver.solve(self.model, tee=True)
+        results = solver.solve(self.model, tee=verbose)
 
         if results.solver.termination_condition == "optimal":    
             self.logger.info("Optimization successful")
@@ -398,6 +408,11 @@ class SimpleVaporCompressionCycle:
         self.model.fs.properties.pt_diagram()
         plt.plot(T_sol, p_sol/1000, 'ko')
         plt.show()
+
         self.model.fs.properties.ts_diagram()
-        plt.plot(S_sol, T_sol, 'ko')
+        plt.plot(S_sol/1000, T_sol, 'ko')
         plt.show()
+
+        for unit in self.unit_operations:
+            unit.report()
+
