@@ -88,6 +88,12 @@ class SimpleVaporCompressionCycle:
         # Out flowsheet is a closed, circular loop
         self.model.fs.evaporator_to_compressor_expanded.flow_mass_equality.deactivate()
 
+        # Set up the objective function
+        self.model.fs.COP = Objective(expr=(self.model.fs.evaporator.heat_duty[0]) /
+                                (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
+        
+        self.model.fs.COP.deactivate()
+
     def draw_thermodynamic_diagrams(self):
         self.model.fs.properties.hp_diagram()
         plt.show()
@@ -98,6 +104,11 @@ class SimpleVaporCompressionCycle:
         self.model.fs.properties.ts_diagram()
         plt.show()
 
+    # TODO: Make this a private method
+    # Instead, the user should just specify the high and low temperatures
+    # From the PT diagram, we can determine the high and low pressures
+    # Then from the PH diagram, we can determine the enthalpy values
+    # And call this function
     def specify_initial_conditions(self,
                                    enthalpy = [410, 430, 256, 260], # kJ/kg
                                    pressure = [300, 1100, 1100, 300]): # kPa
@@ -352,6 +363,9 @@ class SimpleVaporCompressionCycle:
 
         self.logger.info("Initializing the flowsheet by solving with no objective...")
 
+        # Disable the objective function
+        self.model.fs.COP.deactivate()
+
         solver = get_solver()
         solver.options = {'max_iter': 200}
         results = solver.solve(self.model, tee=verbose)
@@ -366,9 +380,8 @@ class SimpleVaporCompressionCycle:
 
         self.logger.info("Setting up the optimization problem...")
 
-        # Set up the objective function
-        self.model.fs.COP = Objective(expr=(self.model.fs.evaporator.heat_duty[0]) /
-                                (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
+        # Activate the objective function
+        self.model.fs.COP.activate()
             
         # Solve the optimization problem
         results = solver.solve(self.model, tee=verbose)
