@@ -12,7 +12,7 @@ from idaes.models.unit_models import (Heater, Turbine, Compressor,
 from idaes.core.solvers import get_solver
 from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core.util.scaling import calculate_scaling_factors
-from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory
+from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory, Param
 from idaes.core.util.initialization import propagate_state
 from pyomo.network import Arc
 from pyomo.environ import units as pyunits
@@ -95,6 +95,27 @@ class SimpleVaporCompressionCycle:
                                 (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
         
         self.model.fs.COP.deactivate()
+
+        
+        self.model.fs.evaporator.superheating = Param(initialize=0, mutable=True)
+
+        @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
+        def superheating_constraint(b):
+            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].t_sat_func(
+                b.outlet.temperature[0]
+            ) + b.superheating
+        
+        self.model.fs.evaporator.superheating_constraint.deactivate()
+
+        self.model.fs.condenser.subcooling = Param(initialize=0, mutable=True)
+
+        @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
+        def subcooling_constraint(b):
+            return b.outlet.temperature[0] <= b.control_volume.properties_out[0].t_sat_func(
+                b.outlet.temperature[0]
+            ) - b.subcooling
+        
+        self.model.fs.condenser.subcooling_constraint.deactivate()
 
     def draw_thermodynamic_diagrams(self):
         self.model.fs.properties.hp_diagram()
@@ -296,11 +317,12 @@ class SimpleVaporCompressionCycle:
         # Evaporator outlet must be a vapor
         self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
 
-        
+        # Activate superheating constraint
         if superheating > 0.1:
-            @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
-            def subcooling_constraint(b):
-                return b.outlet.temperature[0] >= b.control_volume.properties_out[0].t_sat_func + superheating
+            self.model.fs.evaporator.superheating = superheating
+            self.model.fs.evaporator.superheating_constraint.activate()
+        else:
+            self.model.fs.evaporator.superheating_constraint.deactivate()
 
         ## Compressor
 
@@ -348,10 +370,12 @@ class SimpleVaporCompressionCycle:
         # Condenser outlet must be a liquid
         self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
 
+        # Activate subcooling constraint
         if subcooling > 0.1:
-            @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
-            def subcooling_constraint(b):
-                return b.outlet.temperature[0] <= b.control_volume.properties_out[0].t_sat_func() - subcooling
+            self.model.fs.condenser.subcooling = subcooling
+            self.model.fs.condenser.subcooling_constraint.activate()
+        else:
+            self.model.fs.condenser.subcooling_constraint.deactivate()
 
 
         ## Expansion Valve
