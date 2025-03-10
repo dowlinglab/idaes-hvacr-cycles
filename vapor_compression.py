@@ -97,7 +97,7 @@ class SimpleVaporCompressionCycle:
         self.model.fs.COP.deactivate()
 
         
-        self.model.fs.evaporator.superheating = Param(initialize=0, mutable=True)
+        self.model.fs.evaporator.superheating = Param(initialize=0, units=pyunits.K, mutable=True)
 
         @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
         def superheating_constraint(b):
@@ -105,7 +105,7 @@ class SimpleVaporCompressionCycle:
         
         self.model.fs.evaporator.superheating_constraint.deactivate()
 
-        self.model.fs.condenser.subcooling = Param(initialize=0, mutable=True)
+        self.model.fs.condenser.subcooling = Param(initialize=0, units=pyunits.K, mutable=True)
 
         @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
         def subcooling_constraint(b):
@@ -270,15 +270,21 @@ class SimpleVaporCompressionCycle:
             unit.inlet.vapor_frac[0].setlb(0)
             unit.inlet.vapor_frac[0].setub(1)
 
+        def check_input(bounds):
+            if bounds is not None and len(bounds) == 2:
+                return True
+            else:
+                return False
+
         # Convert pressures from kPa to Pa
-        if not None and len(low_side_pressure) == 2:
+        if check_input(low_side_pressure):
             low_side_pressure_min = low_side_pressure[0]*1000
             low_side_pressure_max = low_side_pressure[1]*1000
         else:
             low_side_pressure_min = None
             low_side_pressure_max = None
 
-        if not None and len(high_side_pressure) == 2:
+        if check_input(high_side_pressure):
             high_side_pressure_min = high_side_pressure[0]*1000
             high_side_pressure_max = high_side_pressure[1]*1000
         else:
@@ -288,11 +294,7 @@ class SimpleVaporCompressionCycle:
         # Set mass flowrate to 1 kg/s because we only care about thermodynamic efficiency
         self.model.fs.evaporator.inlet.flow_mass[0].fix(1)
 
-        def check_input(bounds):
-            if bounds is not None and len(bounds) == 2:
-                return True
-            else:
-                return False
+
 
         ## Evaporator
 
