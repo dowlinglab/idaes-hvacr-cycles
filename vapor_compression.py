@@ -361,24 +361,26 @@ class SimpleVaporCompressionCycle:
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
 
-    def optimize_COP(self, verbose):
-
-        self.logger.info("Initializing the flowsheet by solving with no objective...")
-
-        # Disable the objective function
-        self.model.fs.COP.deactivate()
+    def optimize_COP(self, verbose, initialize=True):
 
         solver = get_solver()
         solver.options = {'max_iter': 500}
-        results = solver.solve(self.model, tee=verbose)
+        
+        if initialize:
+            self.logger.info("Initializing the flowsheet by solving with no objective...")
 
-        if results.solver.termination_condition == "optimal":
-            self.logger.info("Initialization successful")
-        else:
-            self.logger.error("Initialization failed")
+            # Disable the objective function
+            self.model.fs.COP.deactivate()
 
-        if verbose:
-            self.model.fs.report()
+            results = solver.solve(self.model, tee=verbose)
+
+            if results.solver.termination_condition == "optimal":
+                self.logger.info("Initialization successful")
+            else:
+                self.logger.error("Initialization failed")
+
+            if verbose:
+                self.model.fs.report()
 
         self.logger.info("Setting up the optimization problem...")
 
