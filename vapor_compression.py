@@ -459,6 +459,10 @@ class SimpleVaporCompressionCycle:
 
         self.logger.info("Setting up the optimization problem...")
 
+        # Deactivate a pressure constraints
+        # I am skeptical about this
+        self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
+
         # Activate the objective function
         self.model.fs.compute_cop.activate()
         self.model.fs.obj.activate()
