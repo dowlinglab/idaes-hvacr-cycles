@@ -12,7 +12,7 @@ from idaes.models.unit_models import (Heater, Turbine, Compressor,
 from idaes.core.solvers import get_solver
 from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core.util.scaling import calculate_scaling_factors
-from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory, Param
+from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory, Param, Var
 from idaes.core.util.initialization import propagate_state
 from pyomo.network import Arc
 from pyomo.environ import units as pyunits
@@ -91,11 +91,22 @@ class SimpleVaporCompressionCycle:
         self.model.fs.evaporator_to_compressor_expanded.flow_mass_equality.deactivate()
 
         # Set up the objective function
+        '''
         self.model.fs.COP = Objective(expr=(self.model.fs.evaporator.heat_duty[0]) /
                                 (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
-        
-        self.model.fs.COP.deactivate()
+        '''
+        self.model.fs.cop = Var(initialize=1, units=pyunits.dimensionless, bounds=(0.1, 10))
 
+        @self.model.fs.Constraint(doc="COP constraint")
+        def compute_cop(b):
+            return b.cop * b.compressor.work_mechanical[0] == b.evaporator.heat_duty[0]
+        
+        @self.model.fs.Objective(doc="Maximize COP", sense=maximize)
+        def obj(b):
+            return b.cop
+                                
+        self.model.fs.compute_cop.deactivate()
+        self.model.fs.obj.deactivate()
         
         self.model.fs.evaporator.superheating = Param(initialize=0, units=pyunits.K, mutable=True)
 
@@ -427,7 +438,8 @@ class SimpleVaporCompressionCycle:
             self.logger.info("Initializing the flowsheet by solving with no objective...")
 
             # Disable the objective function
-            self.model.fs.COP.deactivate()
+            self.model.fs.compute_cop.deactivate()
+            self.model.fs.obj.deactivate()
 
             results = solver.solve(self.model, tee=verbose)
 
@@ -439,10 +451,14 @@ class SimpleVaporCompressionCycle:
             if verbose:
                 self.model.fs.report()
 
+            # Compute the COP
+            self.model.fs.cop = self.model.fs.evaporator.heat_duty[0].value / self.model.fs.compressor.work_mechanical[0].value
+
         self.logger.info("Setting up the optimization problem...")
 
         # Activate the objective function
-        self.model.fs.COP.activate()
+        self.model.fs.compute_cop.activate()
+        self.model.fs.obj.activate()
             
         # Solve the optimization problem
         results = solver.solve(self.model, tee=verbose)
@@ -470,11 +486,11 @@ class SimpleVaporCompressionCycle:
         if verbose:
             self.model.fs.report()
 
-        return value(self.model.fs.COP)
+        return value(self.model.fs.cop)
 
     def report_solution(self):
 
-        print("Optimized COP:", round(value(self.model.fs.COP),3))
+        print("Optimized COP:", round(value(self.model.fs.cop),3))
 
         n = len(self.h_init)
 
