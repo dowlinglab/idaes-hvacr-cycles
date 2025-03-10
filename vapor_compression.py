@@ -370,7 +370,7 @@ class SimpleVaporCompressionCycle:
             self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.999)
 
         # Compressor only allows input work
-        self.model.fs.compressor.work_mechanical.setlb(0)
+        # self.model.fs.compressor.work_mechanical.setlb(0)
 
         # Set the maximum pressure ratio
         self.model.fs.compressor.ratioP.setub(max_pressure_ratio)
