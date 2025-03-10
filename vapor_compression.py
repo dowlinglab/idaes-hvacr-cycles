@@ -289,8 +289,9 @@ class SimpleVaporCompressionCycle:
             unit.outlet.vapor_frac[0].unfix()
 
             # Set bounds for the vapor fraction to ensure it is within [0,1]
-            unit.inlet.vapor_frac[0].setlb(0)
-            unit.inlet.vapor_frac[0].setub(1)
+            if False:
+                unit.inlet.vapor_frac[0].setlb(0)
+                unit.inlet.vapor_frac[0].setub(1)
 
         def check_input(bounds):
             if bounds is not None and len(bounds) == 2:
@@ -336,7 +337,7 @@ class SimpleVaporCompressionCycle:
 
         # Evaporator outlet must be a vapor
         if bound_vapor_frac:
-            self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
+            self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.99)
 
         # Activate superheating constraint
         if superheating > 0.1:
@@ -367,7 +368,7 @@ class SimpleVaporCompressionCycle:
         
         # Compressor outlet must be a vapor
         if bound_vapor_frac:
-            self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.999)
+            self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.99)
 
         # Compressor only allows input work
         # self.model.fs.compressor.work_mechanical.setlb(0)
@@ -395,7 +396,7 @@ class SimpleVaporCompressionCycle:
 
         # Condenser outlet must be a liquid
         if bound_vapor_frac:
-            self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
+            self.model.fs.condenser.outlet.vapor_frac[0].setub(0.01)
 
         # Activate subcooling constraint
         if subcooling > 0.1:
@@ -426,8 +427,8 @@ class SimpleVaporCompressionCycle:
 
         # Expansion valve outlet must be two-phase
         if bound_vapor_frac:
-            self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.001)
-            self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.999)
+            self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.01)
+            self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.99)
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
