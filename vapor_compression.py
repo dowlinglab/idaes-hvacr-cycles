@@ -220,13 +220,20 @@ class SimpleVaporCompressionCycle:
 
         propagate_state(self.model.fs.expansion_valve_to_evaporator)
 
+        if verbose:
+            print("\nFinished initialization. Stream summary:")
+            self.model.fs.report()
+
     def set_specifications(self,
                            low_side_pressure = (2E5, 5E5),
                            high_side_pressure = (1E6, 3E6),
                            evaporator_temperature = (-20, 0),
                            compressor_temperature = None,
                            condenser_temperature = (30, 50),
-                           expansion_valve_temperature = None):
+                           expansion_valve_temperature = None,
+                           subcooling = 3, # degC
+                           superheating = 3 # degC
+                           ):
         
         C_to_K = 273.15
 
@@ -289,6 +296,12 @@ class SimpleVaporCompressionCycle:
         # Evaporator outlet must be a vapor
         self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
 
+        
+        if superheating > 0.1:
+            @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
+            def subcooling_constraint(b):
+                return b.outlet.temperature[0] >= b.control_volume.properties_out[0].t_sat_func + superheating
+
         ## Compressor
 
         # Compressor pressure bounds
@@ -334,6 +347,12 @@ class SimpleVaporCompressionCycle:
 
         # Condenser outlet must be a liquid
         self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
+
+        if subcooling > 0.1:
+            @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
+            def subcooling_constraint(b):
+                return b.outlet.temperature[0] <= b.control_volume.properties_out[0].t_sat_func() - subcooling
+
 
         ## Expansion Valve
 
