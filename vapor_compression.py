@@ -250,7 +250,7 @@ class SimpleVaporCompressionCycle:
                            expansion_valve_temperature = None,
                            subcooling = 3, # degC
                            superheating = 3, # degC
-                           bound_vapor_frac = False
+                           bound_vapor_frac = True
                            ):
         
         C_to_K = 273.15
