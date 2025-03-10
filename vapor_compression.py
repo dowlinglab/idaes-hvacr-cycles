@@ -249,7 +249,8 @@ class SimpleVaporCompressionCycle:
                            condenser_temperature = (30, 50),
                            expansion_valve_temperature = None,
                            subcooling = 3, # degC
-                           superheating = 3 # degC
+                           superheating = 3, # degC
+                           bound_vapor_frac = False
                            ):
         
         C_to_K = 273.15
@@ -262,9 +263,11 @@ class SimpleVaporCompressionCycle:
             unit.inlet.flow_mass[0].unfix()
             unit.inlet.temperature[0].unfix()
             unit.inlet.pressure[0].unfix()
+            unit.inlet.vapor_frac[0].unfix()
             unit.outlet.flow_mass[0].unfix()
             unit.outlet.temperature[0].unfix()
             unit.outlet.pressure[0].unfix()
+            unit.outlet.vapor_frac[0].unfix()
 
             # Set bounds for the vapor fraction to ensure it is within [0,1]
             unit.inlet.vapor_frac[0].setlb(0)
@@ -313,7 +316,8 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.evaporator.outlet.temperature[0].setub(evaporator_temperature[1] + C_to_K)
 
         # Evaporator outlet must be a vapor
-        self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
+        if bound_vapor_frac:
+            self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.999)
 
         # Activate superheating constraint
         if superheating > 0.1:
@@ -343,7 +347,8 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.compressor.outlet.temperature[0].setub(compressor_temperature[1] + C_to_K)
         
         # Compressor outlet must be a vapor
-        self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.999)
+        if bound_vapor_frac:
+            self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.999)
 
         # Compressor only allows input work
         self.model.fs.compressor.work_mechanical.setlb(0)
@@ -366,7 +371,8 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.condenser.outlet.temperature[0].setub(condenser_temperature[1]+ C_to_K)
 
         # Condenser outlet must be a liquid
-        self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
+        if bound_vapor_frac:
+            self.model.fs.condenser.outlet.vapor_frac[0].setub(0.001)
 
         # Activate subcooling constraint
         if subcooling > 0.1:
@@ -396,8 +402,9 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.expansion_valve.outlet.temperature[0].setub(expansion_valve_temperature[1]+ C_to_K)
 
         # Expansion valve outlet must be two-phase
-        self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.001)
-        self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.999)
+        if bound_vapor_frac:
+            self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.001)
+            self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.999)
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
