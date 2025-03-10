@@ -250,10 +250,15 @@ class SimpleVaporCompressionCycle:
                            expansion_valve_temperature = None,
                            subcooling = 3, # degC
                            superheating = 3, # degC
+                           max_pressure_ratio = 4,
                            bound_vapor_frac = True
                            ):
         
         C_to_K = 273.15
+
+        assert superheating >= 0, "Superheating must be greater than or equal to 0"
+        assert subcooling >= 0, "Subcooling must be greater than or equal to 0"
+        assert max_pressure_ratio > 1.2, "Maximum pressure ratio must be greater than 1.2"
 
         ## Unfix the conditions from initialization
         self.unit_operations = [self.model.fs.evaporator, self.model.fs.compressor, self.model.fs.condenser, self.model.fs.expansion_valve]
@@ -352,6 +357,10 @@ class SimpleVaporCompressionCycle:
 
         # Compressor only allows input work
         self.model.fs.compressor.work_mechanical.setlb(0)
+
+        # Set the maximum pressure ratio
+        self.model.fs.compressor.ratioP.setub(max_pressure_ratio)
+        self.model.fs.compressor.ratioP.setlb(1.1)
 
         ## Condenser
 
