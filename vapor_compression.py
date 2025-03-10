@@ -101,9 +101,7 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
         def superheating_constraint(b):
-            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].t_sat_func(
-                b.outlet.temperature[0]
-            ) + b.superheating
+            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].temperature_sat + b.superheating
         
         self.model.fs.evaporator.superheating_constraint.deactivate()
 
@@ -111,9 +109,7 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
         def subcooling_constraint(b):
-            return b.outlet.temperature[0] <= b.control_volume.properties_out[0].t_sat_func(
-                b.outlet.temperature[0]
-            ) - b.subcooling
+            return b.outlet.temperature[0] <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
         
         self.model.fs.condenser.subcooling_constraint.deactivate()
 
