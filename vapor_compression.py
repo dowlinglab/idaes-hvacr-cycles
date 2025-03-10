@@ -421,7 +421,7 @@ class SimpleVaporCompressionCycle:
     def optimize_COP(self, verbose, initialize=True):
 
         solver = get_solver()
-        solver.options = {'max_iter': 500}
+        solver.options = {'max_iter': 1000}
         
         if initialize:
             self.logger.info("Initializing the flowsheet by solving with no objective...")
@@ -447,8 +447,9 @@ class SimpleVaporCompressionCycle:
         # Solve the optimization problem
         results = solver.solve(self.model, tee=verbose)
 
-        # Resolve just in case the optimizer got stuck
-        results = solver.solve(self.model, tee=verbose)
+        # Resolve if the optimizer got stuck
+        if results.solver.termination_condition != "optimal":
+            results = solver.solve(self.model, tee=verbose)
 
         # Resolve if the optimizer got stuck
         if results.solver.termination_condition != "optimal":
