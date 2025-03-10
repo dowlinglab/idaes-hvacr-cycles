@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import logging
 import CoolProp.CoolProp as CP
 
+from idaes.core.util import DiagnosticsToolbox
+
 class SimpleVaporCompressionCycle:
 
     def __init__(self,fluid_name, compressor_efficiency=0.85):
@@ -367,7 +369,7 @@ class SimpleVaporCompressionCycle:
         self.model.fs.COP.deactivate()
 
         solver = get_solver()
-        solver.options = {'max_iter': 200}
+        solver.options = {'max_iter': 500}
         results = solver.solve(self.model, tee=verbose)
 
         if results.solver.termination_condition == "optimal":
@@ -386,11 +388,24 @@ class SimpleVaporCompressionCycle:
         # Solve the optimization problem
         results = solver.solve(self.model, tee=verbose)
 
+        # Resolve just in case the optimizer got stuck
+        results = solver.solve(self.model, tee=verbose)
+
+        # Resolve if the optimizer got stuck
+        if results.solver.termination_condition != "optimal":
+            results = solver.solve(self.model, tee=verbose)
+
+        # Check the solver status
         if results.solver.termination_condition == "optimal":    
             self.logger.info("Optimization successful")
             self.logger.info("COP: {:.2f}".format(value(self.model.fs.COP)))
         else:
             self.logger.error("Optimization failed")
+
+            # Create a diagnostics toolbox instance
+            diag = DiagnosticsToolbox(self.model, constraint_residual_tolerance=1e-6)
+
+            diag.display_constraints_with_large_residuals()
 
         if verbose:
             self.model.fs.report()
