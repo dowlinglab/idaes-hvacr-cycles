@@ -102,7 +102,7 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.Constraint(doc="COP constraint")
         def compute_cop(b):
-            return b.cop * b.compressor.work_mechanical[0] / 1000 == b.evaporator.heat_duty[0] / 1000
+            return b.cop * b.compressor.work_mechanical[0] == b.evaporator.heat_duty[0] 
         
         @self.model.fs.Objective(doc="Maximize COP", sense=maximize)
         def obj(b):
