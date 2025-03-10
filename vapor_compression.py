@@ -102,7 +102,7 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.Constraint(doc="COP constraint")
         def compute_cop(b):
-            return b.cop * b.compressor.work_mechanical[0] == b.evaporator.heat_duty[0]
+            return b.cop * b.compressor.work_mechanical[0] / 1000 == b.evaporator.heat_duty[0] / 1000
         
         @self.model.fs.Objective(doc="Maximize COP", sense=maximize)
         def obj(b):
@@ -458,10 +458,6 @@ class SimpleVaporCompressionCycle:
             self.model.fs.cop = self.model.fs.evaporator.heat_duty[0].value / self.model.fs.compressor.work_mechanical[0].value
 
         self.logger.info("Setting up the optimization problem...")
-
-        # Deactivate a pressure constraints
-        # I am skeptical about this
-        self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
 
         # Activate the objective function
         self.model.fs.compute_cop.activate()
