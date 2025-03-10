@@ -90,6 +90,9 @@ class SimpleVaporCompressionCycle:
         # Out flowsheet is a closed, circular loop
         self.model.fs.evaporator_to_compressor_expanded.flow_mass_equality.deactivate()
 
+        # Let's see if this helps with convergence
+        # self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
+
         # Set up the objective function
         '''
         self.model.fs.COP = Objective(expr=(self.model.fs.evaporator.heat_duty[0]) /
