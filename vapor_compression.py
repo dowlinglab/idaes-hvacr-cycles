@@ -92,6 +92,8 @@ class SimpleVaporCompressionCycle:
 
         # Let's see if this helps with convergence
         # self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
+        # self.model.fs.expansion_valve_to_evaporator_expanded.pressure_equality.deactivate()
+        self.model.fs.expansion_valve_to_evaporator_expanded.temperature_equality.deactivate()
 
         # Set up the objective function
         '''
