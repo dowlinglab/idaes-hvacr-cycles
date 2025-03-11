@@ -459,7 +459,7 @@ class SimpleVaporCompressionCycle:
     def optimize_COP(self, verbose, initialize=True):
 
         solver = get_solver()
-        solver.options = {'max_iter': 1000, 'tol': 1e-6} # relax the tolerance
+        solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver':'ma57'} # relax the tolerance
         
         if initialize:
             self.logger.info("Initializing the flowsheet by solving with no objective...")
