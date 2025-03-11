@@ -14,8 +14,15 @@ Optimization models for HVAC and R applications in IDAES/Pyomo
 
 `simple_refridgeration3.ipynb`
 * Refactored to use `vapor_compression.py`
-* Sensitivity analysis shows the model is brittle
-* TODO: subcool and superheat by 3 deg C
-* TODO: clean up/streamline initialization routine such that the user just speficies two temperatures
-* TODO: Try CoolProp too
-* TODO: try other refrigerants
+* Determined the complementary-like constraints was causing convergence issues (multipliers cycling)
+* TODO: Switch from Tsat to Psat constraint
+* TODO: Remove obsolete initialization options, streamline code
+* TODO: Add more comments
+* TODO: Determine why the sensitivity analysis does not always converge or gets stuck in local solutions. Ideally, every solve in the sensitivity analysis should be very clean.
+
+
+Enhancement Ideas:
+* Clean up/streamline initialization routine such that the user just speficies two temperatures
+* Create another version using PH state variables
+* Try CoolProp too
+* Try other refrigerants
