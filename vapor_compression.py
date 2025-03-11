@@ -453,6 +453,12 @@ class SimpleVaporCompressionCycle:
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.01)
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.99)
 
+        # This constraint has a point singularity for two phase fluids
+        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+
+        # Use this constraint instead
+        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
+
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
 
@@ -501,7 +507,7 @@ class SimpleVaporCompressionCycle:
         # Check the solver status
         if results.solver.termination_condition == "optimal":    
             self.logger.info("Optimization successful")
-            self.logger.info("COP: {:.2f}".format(value(self.model.fs.COP)))
+            self.logger.info("COP: {:.2f}".format(value(self.model.fs.cop)))
         else:
             self.logger.error("Optimization failed")
 
