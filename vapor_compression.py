@@ -361,6 +361,10 @@ class SimpleVaporCompressionCycle:
         # Evaporator outlet must be a vapor
         if bound_vapor_frac:
             self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.99)
+        self.model.fs.evaporator.outlet.vapor_frac[0].fix(1.0)
+
+        # Deactivate the complementarity-like constraint because we fixed the phase
+        self.model.fs.evaporator.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
         # Activate superheating constraint
         if superheating > 0.1:
@@ -392,6 +396,13 @@ class SimpleVaporCompressionCycle:
         # Compressor outlet must be a vapor
         if bound_vapor_frac:
             self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.99)
+        self.model.fs.compressor.outlet.vapor_frac[0].fix(1.0)
+
+        # Deactivate the complementarity-like constraint because we fixed the phase
+        self.model.fs.compressor.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+
+        # Add inequality constraint to ensure the compressor outlet is only vapor
+        self.model.fs.compressor.vapor_constraint.activate()
 
         # Compressor only allows input work
         # self.model.fs.compressor.work_mechanical.setlb(0)
@@ -420,6 +431,12 @@ class SimpleVaporCompressionCycle:
         # Condenser outlet must be a liquid
         if bound_vapor_frac:
             self.model.fs.condenser.outlet.vapor_frac[0].setub(0.01)
+        self.model.fs.condenser.outlet.vapor_frac[0].fix(0.0)
+
+        # Deactivate the complementarity-like constraint because we fixed the phase
+        self.model.fs.condenser.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+
+
 
         # Activate subcooling constraint
         if subcooling > 0.1:
@@ -453,11 +470,11 @@ class SimpleVaporCompressionCycle:
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.01)
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.99)
 
-        # This constraint has a point singularity for two phase fluids (maybe)
-        # self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+        # This constraint has two smoothed max operators, might have a point singularity
+        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
         # Use this constraint instead
-        # self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
+        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
