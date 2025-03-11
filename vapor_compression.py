@@ -127,6 +127,18 @@ class SimpleVaporCompressionCycle:
         
         self.model.fs.condenser.subcooling_constraint.deactivate()
 
+        @self.model.fs.compressor.Constraint(doc="Must be a vapor")
+        def vapor_constraint(b):
+            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].temperature_sat
+
+        self.model.fs.compressor.vapor_constraint.deactivate()
+
+        @self.model.fs.expansion_valve.Constraint(doc="Must be two-phase")
+        def two_phase_constraint(b):
+            return b.outlet.temperature[0] == b.control_volume.properties_out[0].temperature_sat
+
+        self.model.fs.expansion_valve.two_phase_constraint.deactivate()
+
     def draw_thermodynamic_diagrams(self):
         self.model.fs.properties.hp_diagram()
         plt.show()
@@ -265,7 +277,8 @@ class SimpleVaporCompressionCycle:
                            subcooling = 3, # degC
                            superheating = 3, # degC
                            max_pressure_ratio = 4,
-                           bound_vapor_frac = True
+                           bound_vapor_frac = True,
+                           Tsat_constraints = False
                            ):
         
         C_to_K = 273.15
@@ -273,6 +286,7 @@ class SimpleVaporCompressionCycle:
         assert superheating >= 0, "Superheating must be greater than or equal to 0"
         assert subcooling >= 0, "Subcooling must be greater than or equal to 0"
         assert max_pressure_ratio > 1.2, "Maximum pressure ratio must be greater than 1.2"
+        assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
 
         ## Unfix the conditions from initialization
         self.unit_operations = [self.model.fs.evaporator, self.model.fs.compressor, self.model.fs.condenser, self.model.fs.expansion_valve]
@@ -289,9 +303,16 @@ class SimpleVaporCompressionCycle:
             unit.outlet.vapor_frac[0].unfix()
 
             # Set bounds for the vapor fraction to ensure it is within [0,1]
-            if False:
+            if True:
                 unit.inlet.vapor_frac[0].setlb(0)
                 unit.inlet.vapor_frac[0].setub(1)
+
+        if Tsat_constraints:
+            self.model.fs.compressor.vapor_constraint.activate()
+            self.model.fs.expansion_valve.two_phase_constraint.activate()
+        else:
+            self.model.fs.compressor.vapor_constraint.deactivate()
+            self.model.fs.expansion_valve.two_phase_constraint.deactivate()
 
         def check_input(bounds):
             if bounds is not None and len(bounds) == 2:
@@ -436,7 +457,7 @@ class SimpleVaporCompressionCycle:
     def optimize_COP(self, verbose, initialize=True):
 
         solver = get_solver()
-        solver.options = {'max_iter': 1000}
+        solver.options = {'max_iter': 1000, 'tol': 1e-6} # relax the tolerance
         
         if initialize:
             self.logger.info("Initializing the flowsheet by solving with no objective...")
