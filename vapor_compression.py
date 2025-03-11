@@ -453,11 +453,11 @@ class SimpleVaporCompressionCycle:
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.01)
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.99)
 
-        # This constraint has a point singularity for two phase fluids
-        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+        # This constraint has a point singularity for two phase fluids (maybe)
+        # self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
         # Use this constraint instead
-        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
+        # self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
