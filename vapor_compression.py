@@ -23,10 +23,16 @@ import logging
 import CoolProp.CoolProp as CP
 
 from idaes.core.util import DiagnosticsToolbox
+from enum import Enum
+
+class Mode(Enum):
+    ORIGINAL_TPX = "original_TPx"
+    IMPROVED_TPX = "improved_TPx"
+    PH = "PH"
 
 class SimpleVaporCompressionCycle:
 
-    def __init__(self,fluid_name, compressor_efficiency=0.85):
+    def __init__(self,fluid_name, compressor_efficiency=0.85, mode=Mode.IMPROVED_TPX):
         ''' Simple Vapor Compression Cycle
 
         Parameters:
@@ -43,8 +49,17 @@ class SimpleVaporCompressionCycle:
         self.model = ConcreteModel()
         self.model.fs = FlowsheetBlock(dynamic=False)
 
+        # State variables
+        if mode == Mode.PH:
+            sv = StateVars.PH
+        else:
+            sv = StateVars.TPX
+
+        # Save the mode
+        self.mode = mode
+
         # Add property package for a common refrigerant (e.g., R134a) using General Helmholtz model
-        self.model.fs.properties = HelmholtzParameterBlock(pure_component="R134a", 
+        self.model.fs.properties = HelmholtzParameterBlock(pure_component=fluid_name, 
                                                     state_vars=StateVars.TPX, 
                                                     amount_basis=AmountBasis.MASS)
         
@@ -117,7 +132,7 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
         def superheating_constraint(b):
-            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].temperature_sat + b.superheating
+            return b.control_volume.properties_out[0].temperature[0] >= b.control_volume.properties_out[0].temperature_sat + b.superheating
         
         self.model.fs.evaporator.superheating_constraint.deactivate()
 
@@ -125,19 +140,19 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
         def subcooling_constraint(b):
-            return b.outlet.temperature[0] <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
+            return b.control_volume.properties_out[0] <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
         
         self.model.fs.condenser.subcooling_constraint.deactivate()
 
         @self.model.fs.compressor.Constraint(doc="Must be a vapor")
         def vapor_constraint(b):
-            return b.outlet.temperature[0] >= b.control_volume.properties_out[0].temperature_sat
+            return b.control_volume.properties_out[0].temperature[0] >= b.control_volume.properties_out[0].temperature_sat
 
         self.model.fs.compressor.vapor_constraint.deactivate()
 
         @self.model.fs.expansion_valve.Constraint(doc="Must be two-phase")
         def two_phase_constraint(b):
-            return b.outlet.temperature[0] == b.control_volume.properties_out[0].temperature_sat
+            return b.control_volume.properties_out[0].temperature[0] == b.control_volume.properties_out[0].temperature_sat
 
         self.model.fs.expansion_valve.two_phase_constraint.deactivate()
 
@@ -156,6 +171,14 @@ class SimpleVaporCompressionCycle:
     # From the PT diagram, we can determine the high and low pressures
     # Then from the PH diagram, we can determine the enthalpy values
     # And call this function
+    #
+    # TODO: How to generalize this to work for either state variable?
+    # Procedures:
+    # - User specifies high and low temperature
+    # - Use CoolProp to compute saturation pressures for high and low side
+    # - Apply modest subcooling and superheating (or make an option)
+    # - Use CoolProp to compute enthalpies
+    # - Initialize the state variables
     def specify_initial_conditions(self,
                                    enthalpy = [410, 430, 256, 260], # kJ/kg
                                    pressure = [300, 1100, 1100, 300]): # kPa
@@ -211,10 +234,14 @@ class SimpleVaporCompressionCycle:
 
         ## Evaporator
         self.model.fs.evaporator.inlet.flow_mass[0].fix(1)   # Example value
-        self.model.fs.evaporator.inlet.temperature[0].fix(self.T_init[-1])
+
         self.model.fs.evaporator.inlet.pressure[0].fix(self.p_init[-1]*p_scale)
 
-        self.model.fs.evaporator.outlet.temperature[0].fix(self.T_init[0])
+        if self.mode == Mode.PH:
+            # Initialize H
+        else:
+            self.model.fs.evaporator.inlet.temperature[0].fix(self.T_init[-1])
+            self.model.fs.evaporator.outlet.temperature[0].fix(self.T_init[0])
 
         self.logger.info("Initializing evaporator...")
         self.model.fs.evaporator.initialize(outlvl=logging.WARNING)
@@ -225,8 +252,12 @@ class SimpleVaporCompressionCycle:
         propagate_state(self.model.fs.evaporator_to_compressor)
 
         ## Compressor
-        self.model.fs.compressor.inlet.temperature[0].fix(self.T_init[0])
         self.model.fs.compressor.inlet.pressure[0].fix(self.p_init[0]*p_scale)
+
+        if self.mode == Mode.PH:
+            # Initialize H
+        else:
+            self.model.fs.compressor.inlet.temperature[0].fix(self.T_init[0])
 
         self.model.fs.compressor.outlet.pressure[0].fix(self.p_init[1]*p_scale) # Set to target
         # self.model.fs.compressor.outlet.vapor_frac[0].fix(1.0)  # Ensure vapor phase
@@ -241,10 +272,16 @@ class SimpleVaporCompressionCycle:
 
         propagate_state(self.model.fs.compressor_to_condenser)
 
-        self.model.fs.condenser.inlet.temperature[0].fix(self.T_init[1])
+        ## Condenser
+        
         self.model.fs.condenser.inlet.pressure[0].fix(self.p_init[1]*p_scale)
 
-        self.model.fs.condenser.outlet.vapor_frac[0].fix(0.0)  # Ensure liquid phase
+        if self.mode == Mode.PH:
+            # Initialize H
+        else:
+            self.model.fs.condenser.inlet.temperature[0].fix(self.T_init[1])
+            self.model.fs.condenser.outlet.temperature[0].fix(self.T_init[2])
+            self.model.fs.condenser.outlet.vapor_frac[0].fix(0.0)  # Ensure liquid phase (is this needed?)
 
         self.logger.info("Initializing condenser...")
         self.model.fs.condenser.initialize(outlvl=logging.WARNING)
@@ -305,14 +342,14 @@ class SimpleVaporCompressionCycle:
             unit.outlet.vapor_frac[0].unfix()
 
             # Set bounds for the vapor fraction to ensure it is within [0,1]
-            if True:
+            if self.mode == Mode.ORIGINAL_TPX:
                 unit.inlet.vapor_frac[0].setlb(0)
                 unit.inlet.vapor_frac[0].setub(1)
 
-        if Tsat_constraints:
+        if self.mode == Mode.IMPROVED_TPX
             self.model.fs.compressor.vapor_constraint.activate()
             self.model.fs.expansion_valve.two_phase_constraint.activate()
-        else:
+        elif self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.compressor.vapor_constraint.deactivate()
             self.model.fs.expansion_valve.two_phase_constraint.deactivate()
 
@@ -351,7 +388,8 @@ class SimpleVaporCompressionCycle:
             self.model.fs.evaporator.inlet.pressure[0].setub(low_side_pressure_max)
 
         # Evaporator temperature bounds (outlet)
-        if check_input(evaporator_temperature):
+        ## TODO: Set these bounds on the control variable if PH mode
+        if check_input(evaporator_temperature) and self.mode != Mode.PH:
             if evaporator_temperature[0]:
                 self.model.fs.evaporator.outlet.temperature[0].setlb(evaporator_temperature[0] + C_to_K)
             
@@ -359,12 +397,14 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.evaporator.outlet.temperature[0].setub(evaporator_temperature[1] + C_to_K)
 
         # Evaporator outlet must be a vapor
-        if bound_vapor_frac:
+        if self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.evaporator.outlet.vapor_frac[0].setlb(0.99)
-        self.model.fs.evaporator.outlet.vapor_frac[0].fix(1.0)
+        elif self.mode == Mode.IMPROVED_TPX:
+            self.model.fs.evaporator.outlet.vapor_frac[0].fix(1.0)
 
         # Deactivate the complementarity-like constraint because we fixed the phase
-        self.model.fs.evaporator.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+        if self.mode == Mode.IMPROVED_TPX:
+            self.model.fs.evaporator.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
         # Activate superheating constraint
         if superheating > 0.1:
@@ -387,6 +427,7 @@ class SimpleVaporCompressionCycle:
             self.model.fs.compressor.outlet.pressure[0].setub(high_side_pressure_max)
 
         # Compressor temperature bounds (outlet)
+        ## TODO: Set temperature bounds on control volume in PH mode
         if check_input(compressor_temperature):
             if compressor_temperature[0]:
                 self.model.fs.compressor.outlet.temperature[0].setlb(compressor_temperature[0] + C_to_K)
@@ -394,15 +435,16 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.compressor.outlet.temperature[0].setub(compressor_temperature[1] + C_to_K)
         
         # Compressor outlet must be a vapor
-        if bound_vapor_frac:
+        if self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.compressor.outlet.vapor_frac[0].setlb(0.99)
-        self.model.fs.compressor.outlet.vapor_frac[0].fix(1.0)
+        elif self.mode == Mode.IMPROVED_TPX:
+            self.model.fs.compressor.outlet.vapor_frac[0].fix(1.0)
 
-        # Deactivate the complementarity-like constraint because we fixed the phase
-        self.model.fs.compressor.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+            # Deactivate the complementarity-like constraint because we fixed the phase
+            self.model.fs.compressor.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
-        # Add inequality constraint to ensure the compressor outlet is only vapor
-        self.model.fs.compressor.vapor_constraint.activate()
+            # Add inequality constraint to ensure the compressor outlet is only vapor
+            self.model.fs.compressor.vapor_constraint.activate()
 
         # Compressor only allows input work
         # self.model.fs.compressor.work_mechanical.setlb(0)
@@ -422,6 +464,7 @@ class SimpleVaporCompressionCycle:
             self.model.fs.condenser.outlet.pressure[0].setub(high_side_pressure_max)
 
         # Condenser temperature bounds (outlet)
+        # TODO: Write constraint with control volume in PH mode
         if check_input(condenser_temperature):
             if condenser_temperature[0]:
                 self.model.fs.condenser.outlet.temperature[0].setlb(condenser_temperature[0]+ C_to_K)
@@ -429,14 +472,13 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.condenser.outlet.temperature[0].setub(condenser_temperature[1]+ C_to_K)
 
         # Condenser outlet must be a liquid
-        if bound_vapor_frac:
+        if self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.condenser.outlet.vapor_frac[0].setub(0.01)
-        self.model.fs.condenser.outlet.vapor_frac[0].fix(0.0)
+        elif self.mode == Mode.IMPROVED_TPX:
+            self.model.fs.condenser.outlet.vapor_frac[0].fix(0.0)
 
-        # Deactivate the complementarity-like constraint because we fixed the phase
-        self.model.fs.condenser.control_volume.properties_out[0.0].eq_complementarity.deactivate()
-
-
+            # Deactivate the complementarity-like constraint because we fixed the phase
+            self.model.fs.condenser.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
         # Activate subcooling constraint
         if subcooling > 0.1:
@@ -459,6 +501,7 @@ class SimpleVaporCompressionCycle:
             self.model.fs.expansion_valve.inlet.pressure[0].setub(high_side_pressure_max)
 
         # Expansion valve temperature bounds (outlet)
+        # TODO: Write constraint with control volume if PH mode
         if check_input(expansion_valve_temperature):
             if expansion_valve_temperature[0]:
                 self.model.fs.expansion_valve.outlet.temperature[0].setlb(expansion_valve_temperature[0]+ C_to_K)
@@ -466,15 +509,16 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.expansion_valve.outlet.temperature[0].setub(expansion_valve_temperature[1]+ C_to_K)
 
         # Expansion valve outlet must be two-phase
-        if bound_vapor_frac:
+        if self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setlb(0.01)
             self.model.fs.expansion_valve.outlet.vapor_frac[0].setub(0.99)
+        elif self.mode == Mode.IMPROVED_TPX:
 
-        # This constraint has two smoothed max operators, might have a point singularity
-        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
+            # This constraint has two smoothed max operators, might have a point singularity
+            self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
-        # Use this constraint instead
-        self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
+            # Use this constraint instead
+            self.model.fs.expansion_valve.control_volume.properties_out[0.0].eq_sat.activate()
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
@@ -569,4 +613,3 @@ class SimpleVaporCompressionCycle:
 
         for unit in self.unit_operations:
             unit.report()
-
