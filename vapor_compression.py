@@ -185,57 +185,105 @@ class SimpleVaporCompressionCycle:
     # - Use CoolProp to compute enthalpies
     # - Initialize the state variables
     def specify_initial_conditions(self,
-                                   enthalpy = [410, 430, 256, 260], # kJ/kg
-                                   pressure = [300, 1100, 1100, 300]): # kPa
+                                   low_side_temperature = -20, # degC
+                                   high_side_temperature = 30 # degC
+    ):
     
-        ''' Specify initial conditions for the flowsheet
+        ''' Specify initial conditions for the
 
-        Components:
-            0: Evaporator
-            1: Compressor
-            2: Condenser
-            3: Expansion Valve
+        Arguments:
+            low_side_temperature : float
+                Low side temperature in degC
+            high_side_temperature : float
+                High side temperature in degC
 
-        Parameters:
-            enthalpy : list
-                Initial enthalpy values for each component in the cycle
-            pressure : list
-                Initial pressure values for each component in the cycle
-        
         '''
 
-        self.h_init = enthalpy
-        self.p_init = pressure
+        # Convert temperatures to Kelvin
+        C_to_K = 273.15
+        low_side_temperature += C_to_K
+        high_side_temperature += C_to_K
 
+        superheat = 3
+        subcool = 3
+
+        # Compute saturation pressures
+        # Q = 0 for saturated liquid
+        # Q = 1 for saturated vapor
+        # Does not matter here for a pure component
+        # Output is in P
+        low_side_pressure = CP.PropsSI('P', 'T', low_side_temperature, 'Q', 0, self.fluid_name)
+        high_side_pressure = CP.PropsSI('P', 'T', high_side_temperature, 'Q', 0, self.fluid_name)
+
+        # Expansion valve outlet (assume slightly vaporized)
+        low_side_liquid_H = CP.PropsSI('H', 'T', low_side_temperature, 'Q', 0.2, self.fluid_name)
+
+        # Evaporator outlet
+        low_side_vapor_H = CP.PropsSI('H', 'T', low_side_temperature + superheat, 'Q', 1, self.fluid_name)
+        
+        # Compressor outlet
+        high_side_liquid_H = CP.PropsSI('H', 'T', high_side_temperature + superheat, 'Q', 0, self.fluid_name)
+
+        # Condenser outlet
+        high_side_vapor_H = CP.PropsSI('H', 'T', high_side_temperature - subcool, 'Q', 1, self.fluid_name)
+
+        '''
         self.T_init = np.zeros(len(self.h_init))
         for i in range(len(self.h_init)):
             # Inputs are in J/kg and Pa, hence 1000 is needed for unit conversion
             self.T_init[i] = CP.PropsSI('T', 'H', self.h_init[i]*1000, 'P', self.p_init[i]*1000, self.fluid_name)
+        '''
+
+        '''
+        Unit Operation (outlets):
+            0: Evaporator
+            1: Compressor
+            2: Condenser
+            3: Expansion Valve
+        '''
+
+        self.h_init = np.array([low_side_vapor_H, # Evaporator
+                       high_side_vapor_H, # Compressor
+                       high_side_liquid_H, # Condenser 
+                       low_side_liquid_H# Expansion Valve
+                       ]) 
+        
+        self.p_init = np.array([low_side_pressure,
+                       high_side_pressure,
+                       high_side_pressure,
+                       low_side_pressure
+                       ])
+        
+        self.T_init = np.array([low_side_temperature + superheat, # Evaporator
+                       high_side_temperature + superheat, # Compressor
+                       high_side_temperature - subcool, # Condenser
+                       low_side_temperature # Expansion valve
+                       ])
 
         self.model.fs.properties.hp_diagram()
-        plt.plot(self.h_init, self.p_init, 'ko')
+        plt.plot(self.h_init/1000, self.p_init/1000, 'ko')
         plt.show()
 
         self.model.fs.properties.pt_diagram()
-        plt.plot(self.T_init, self.p_init, 'ko')
+        plt.plot(self.T_init, self.p_init/1000, 'ko')
         plt.show()
 
         self.S_init = np.zeros(len(self.h_init))
         for i in range(len(self.h_init)):
             # Inputs are in J/kg and Pa, hence 1000 is needed for unit conversion
             # Output has units J/kg.K, hence 1000 is needed for unit conversion
-            self.S_init[i] = CP.PropsSI('S', 'H', self.h_init[i]*1000, 'P', self.p_init[i]*1000, self.fluid_name)/1000
+            self.S_init[i] = CP.PropsSI('S', 'H', self.h_init[i], 'P', self.p_init[i], self.fluid_name)
 
         self.model.fs.properties.ts_diagram()
-        plt.plot(self.S_init, self.T_init, 'ko')
+        plt.plot(self.S_init/1000, self.T_init, 'ko')
         plt.show()  
 
     def initialize(self, verbose=False):
         ''' Initialize the flowsheet '''
 
 
-        # p_init has units of kPa, hence the scale factor is 1e3 to get Pa
-        p_scale = 1e3
+        # p_init has units of Pa, hence the scale factor is 1 to get Pa
+        p_scale = 1
 
         ## Evaporator
         self.model.fs.evaporator.inlet.flow_mass[0].fix(1)   # Example value
