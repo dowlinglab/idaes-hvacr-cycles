@@ -321,17 +321,14 @@ class SimpleVaporCompressionCycle:
                            expansion_valve_temperature = None,
                            subcooling = 3, # degC
                            superheating = 3, # degC
-                           max_pressure_ratio = 4,
-                           bound_vapor_frac = True,
-                           Tsat_constraints = False
-                           ):
+                           max_pressure_ratio = 4):
         
         C_to_K = 273.15
 
         assert superheating >= 0, "Superheating must be greater than or equal to 0"
         assert subcooling >= 0, "Subcooling must be greater than or equal to 0"
         assert max_pressure_ratio > 1.2, "Maximum pressure ratio must be greater than 1.2"
-        assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
+        # assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
 
         ## Unfix the conditions from initialization
         self.unit_operations = [self.model.fs.evaporator, self.model.fs.compressor, self.model.fs.condenser, self.model.fs.expansion_valve]
@@ -348,7 +345,7 @@ class SimpleVaporCompressionCycle:
             unit.outlet.vapor_frac[0].unfix()
 
             # Set bounds for the vapor fraction to ensure it is within [0,1]
-            if self.mode == Mode.ORIGINAL_TPX:
+            if self.mode == Mode.ORIGINAL_TPX or self.mode == Mode.IMPROVED_TPX:
                 unit.inlet.vapor_frac[0].setlb(0)
                 unit.inlet.vapor_frac[0].setub(1)
 
@@ -358,6 +355,7 @@ class SimpleVaporCompressionCycle:
         elif self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.compressor.vapor_constraint.deactivate()
             self.model.fs.expansion_valve.two_phase_constraint.deactivate()
+        # Need to decide what to do for PH here
 
         def check_input(bounds):
             if bounds is not None and len(bounds) == 2:
