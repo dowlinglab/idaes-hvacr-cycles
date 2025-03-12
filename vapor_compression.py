@@ -147,14 +147,14 @@ class SimpleVaporCompressionCycle:
         @self.model.fs.compressor.Constraint(doc="Must be a vapor")
         def vapor_constraint(b):
             # return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat
-            return b.outlet.pressure[0] >= b.control_volume.properties_out[0].pressure_sat
+            return b.outlet.pressure[0]/1e3 >= b.control_volume.properties_out[0].pressure_sat/1e3
 
         self.model.fs.compressor.vapor_constraint.deactivate()
 
         @self.model.fs.expansion_valve.Constraint(doc="Must be two-phase")
         def two_phase_constraint(b):
             # return b.control_volume.properties_out[0].temperature[0] == b.control_volume.properties_out[0].temperature_sat
-            return b.outlet.pressure[0] == b.control_volume.properties_out[0].pressure_sat
+            return b.outlet.pressure[0]/1e3 == b.control_volume.properties_out[0].pressure_sat/1e3
 
         self.model.fs.expansion_valve.two_phase_constraint.deactivate()
 
