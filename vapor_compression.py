@@ -146,18 +146,21 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.compressor.Constraint(doc="Must be a vapor")
         def vapor_constraint(b):
-            # return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat
-            return b.outlet.pressure[0]/1e3 >= b.control_volume.properties_out[0].pressure_sat/1e3
+            return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat
+            # return b.outlet.pressure[0]/1e3 >= b.control_volume.properties_out[0].pressure_sat/1e3
 
         self.model.fs.compressor.vapor_constraint.deactivate()
 
+        '''
+        # This constraint is redundant with another constraint
         @self.model.fs.expansion_valve.Constraint(doc="Must be two-phase")
         def two_phase_constraint(b):
             # return b.control_volume.properties_out[0].temperature[0] == b.control_volume.properties_out[0].temperature_sat
             return b.outlet.pressure[0]/1e3 == b.control_volume.properties_out[0].pressure_sat/1e3
 
         self.model.fs.expansion_valve.two_phase_constraint.deactivate()
-
+        '''
+        
     def draw_thermodynamic_diagrams(self):
         self.model.fs.properties.hp_diagram()
         plt.show()
@@ -351,10 +354,10 @@ class SimpleVaporCompressionCycle:
 
         if self.mode == Mode.IMPROVED_TPX:
             self.model.fs.compressor.vapor_constraint.activate()
-            self.model.fs.expansion_valve.two_phase_constraint.activate()
+            # self.model.fs.expansion_valve.two_phase_constraint.activate()
         elif self.mode == Mode.ORIGINAL_TPX:
             self.model.fs.compressor.vapor_constraint.deactivate()
-            self.model.fs.expansion_valve.two_phase_constraint.deactivate()
+            # self.model.fs.expansion_valve.two_phase_constraint.deactivate()
         # Need to decide what to do for PH here
 
         def check_input(bounds):
