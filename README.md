@@ -1,5 +1,10 @@
 # idaes-hvacr-cycles
+
 Optimization models for HVAC and R applications in IDAES/Pyomo
+
+This repository for created by Prof. Alexander Dowling at the University of Notre Dame. This work is part of the NSF ERC Environmentally Applied Refrigerant Technology Hub (EARTH).
+
+This repository is an "alpha" version; please use the code with caution.
 
 ## Version
 
