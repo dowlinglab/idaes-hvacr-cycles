@@ -71,6 +71,8 @@ class SimpleVaporCompressionCycle:
         # Save the compressor efficiency
         assert 0 < compressor_efficiency < 1, "Compressor efficiency must be between 0 and 1"
         self.compressor_efficiency = compressor_efficiency
+
+        self.optimization_converged = None
         
         self._define_flowsheet()
 
@@ -692,6 +694,9 @@ class SimpleVaporCompressionCycle:
         if verbose:
             self.model.fs.report()
 
+        # Save the status
+        self.optimization_converged = optimization_converged
+
         return value(self.model.fs.cop), optimization_converged
 
     def report_solution(self):
@@ -711,16 +716,30 @@ class SimpleVaporCompressionCycle:
             T_sol[i] = unit.control_volume.properties_out[0].temperature()
             S_sol[i] = unit.control_volume.properties_out[0].entr_mass()
 
+        def add_warning():
+            if self.optimization_converged == None:
+                # Have not run the optimization yet
+                pass
+            elif not self.optimization_converged:
+                xlim = plt.gca().get_xlim()
+                ylim = plt.gca().get_ylim()
+                x = xlim[1] - (xlim[1] - xlim[0]) * 0.1
+                y = ylim[0] + (ylim[1] - ylim[0]) * 0.1
+                plt.text(x, y, "Warning: did not converge", color="red", fontsize=12, bbox=dict(facecolor='white', alpha=0.8), va='bottom', ha='right')
+
         self.model.fs.properties.hp_diagram()
         plt.plot(h_sol/1000, p_sol/1000, 'ko')
+        add_warning()
         plt.show()
 
         self.model.fs.properties.pt_diagram()
         plt.plot(T_sol, p_sol/1000, 'ko')
+        add_warning()
         plt.show()
 
         self.model.fs.properties.ts_diagram()
         plt.plot(S_sol/1000, T_sol, 'ko')
+        add_warning()
         plt.show()
 
         for unit in self.unit_operations:
