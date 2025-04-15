@@ -679,6 +679,7 @@ class SimpleVaporCompressionCycle:
         if results.solver.termination_condition == "optimal":    
             self.logger.info("Optimization successful")
             self.logger.info("COP: {:.2f}".format(value(self.model.fs.cop)))
+            optimization_converged = True
         else:
             self.logger.error("Optimization failed")
 
@@ -686,11 +687,12 @@ class SimpleVaporCompressionCycle:
             diag = DiagnosticsToolbox(self.model, constraint_residual_tolerance=1e-6)
 
             diag.display_constraints_with_large_residuals()
+            optimization_converged = False
 
         if verbose:
             self.model.fs.report()
 
-        return value(self.model.fs.cop)
+        return value(self.model.fs.cop), optimization_converged
 
     def report_solution(self):
 
