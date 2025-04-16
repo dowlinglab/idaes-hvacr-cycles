@@ -25,6 +25,12 @@ This repository is an "alpha" version; please use the code with caution.
 * Determined sensitivity analysis did not work because evaporator temperature was too low
 * Determined subcooling/supercooling is important to make the sensitivity analysis reliable
 
+`simple_refridgeration4.ipynb`
+* Moved analysis into a single function
+* Repeating the analysis for several refrigerants
+* Still need to debug a few refrigerants
+
 Enhancement Ideas:
-* Try CoolProp too
-* Try other refrigerants
+* Use CoolProp to simulate the ideal cycle. May need to iterate a few times to converge with subcooling/superheating.
+* Determine why this fails for a few refrigerants
+* Experiment with using CoolProp instead of IDAES for initialization
