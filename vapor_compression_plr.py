@@ -33,11 +33,11 @@ class Mode(Enum):
 # Conversion factor
 C_to_K = 273.15
 
-class SimpleVaporCompressionCycle:
+class SimpleVaporCompressionCyclePLR:
 
 
 
-    def __init__(self,fluid_name, compressor_efficiency=0.6, mode=Mode.IMPROVED_TPX):
+    def __init__(self,fluid_name, compressor_efficiency=0.6, mode=Mode.IMPROVED_TPX, plr=0.75, cd=0.25):
         ''' Simple Vapor Compression Cycle
 
         Parameters:
@@ -73,6 +73,8 @@ class SimpleVaporCompressionCycle:
         self.compressor_efficiency = compressor_efficiency
 
         self.optimization_converged = None
+        self.plr = plr
+        self.cd = cd
         
         self._define_flowsheet()
 
@@ -134,7 +136,14 @@ class SimpleVaporCompressionCycle:
                                 
         self.model.fs.compute_cop.deactivate()
         self.model.fs.obj.deactivate()
-        
+
+        # Part-load inputs/outputs
+        self.model.fs.PLR = Param(initialize=self.plr, units=pyunits.dimensionless, mutable=True)
+        self.model.fs.CD = Param(initialize=self.cd, units=pyunits.dimensionless, mutable=True)
+        self.model.fs.PLF = Param(initialize=1.0, units=pyunits.dimensionless, mutable=True)
+        self.model.fs.COP_full = Param(initialize=1.0, units=pyunits.dimensionless, mutable=True)
+        self.model.fs.COP_part = Param(initialize=1.0, units=pyunits.dimensionless, mutable=True)
+
         self.model.fs.evaporator.superheating = Param(initialize=0, units=pyunits.K, mutable=True)
         self.model.fs.evaporator.T_sat_set = Param(initialize=C_to_K, units=pyunits.K, mutable=True)
 
@@ -467,7 +476,9 @@ class SimpleVaporCompressionCycle:
                            ambient_temperature = None, # degC
                            condenser_approach = None, # degC
                            evap_sat_temperature = None, # degC
-                           debug_disable_arc_pressure_eq = False
+                           debug_disable_arc_pressure_eq = False,
+                           plr = None,
+                           cd = None
                            ):
         # print(superheating)
         assert superheating >= 0, "Superheating must be greater than or equal to 0"
@@ -542,8 +553,19 @@ class SimpleVaporCompressionCycle:
                 high_side_pressure_min = None
                 high_side_pressure_max = None
 
-        # Set mass flowrate to 1 kg/s because we only care about thermodynamic efficiency
-        self.model.fs.evaporator.inlet.flow_mass[0].fix(1)
+        # Set PLR/CD and fix mass flowrate (evaporator inlet only, like base model)
+        if plr is not None:
+            self.plr = plr
+        if cd is not None:
+            self.cd = cd
+
+        self.model.fs.PLR.set_value(self.plr)
+        self.model.fs.CD.set_value(self.cd)
+        # Skip PLF/COP_part adjustments when PLR=1 and CD=0 (base-equivalent)
+        if not (self.plr == 1.0 and self.cd == 0.0):
+            self.model.fs.PLF.set_value(self._compute_plf(self.plr, self.cd))
+
+        self.model.fs.evaporator.inlet.flow_mass[0].fix(self.plr * 1)
 
         ## Evaporator
 
@@ -881,7 +903,73 @@ class SimpleVaporCompressionCycle:
         # Save the status
         self.optimization_converged = optimization_converged
 
+        # Update COP_full and COP_part (PLF-scaled)
+        try:
+            if not (self.plr == 1.0 and self.cd == 0.0):
+                cop_full = self.compute_model_cop(self.model)
+                self.model.fs.COP_full.set_value(cop_full)
+                self.model.fs.COP_part.set_value(value(self.model.fs.PLF) * cop_full)
+        except Exception:
+            pass
+
+        # Return part-load COP when PLR/CD are active, otherwise base COP
+        if self.plr is not None and self.cd is not None:
+            return value(self.model.fs.COP_part), optimization_converged
         return value(self.model.fs.cop), optimization_converged
+
+    @staticmethod
+    def _compute_plf(plr: float, cd: float) -> float:
+        """
+        Compute part-load fraction (PLF) from PLR and cyclic degradation coefficient (CD).
+
+        PLF = 1 - CD*(1 - PLR)
+        """
+        if plr < 0.0 or plr > 1.0:
+            raise ValueError("PLR must be in [0, 1]")
+        if cd < 0.0:
+            raise ValueError("CD must be non-negative")
+        plf = 1.0 - cd * (1.0 - plr)
+        return max(0.0, min(1.0, plf))
+
+    @staticmethod
+    def compute_model_cop(model):
+        """
+        Compute thermodynamic COP from model heat and work: COP = |Q_evap| / W_comp.
+        """
+        Q = abs(value(model.fs.evaporator.heat_duty[0]))
+        W = value(model.fs.compressor.work_mechanical[0])
+        if W is None or W == 0:
+            raise ValueError("Compressor work is zero or None")
+        return Q / W
+
+    def get_part_load_cop(self):
+        """
+        Return adjusted part-load COP (COP_part).
+        """
+        return value(self.model.fs.COP_part)
+
+    def rate_capacity_from_design(self, design_kwargs: dict, verbose=False) -> float:
+        """
+        Run a full-load rating solve (PLR=1) to establish Q_rated and COP_full.
+        """
+        if design_kwargs is None:
+            design_kwargs = {}
+        else:
+            design_kwargs = dict(design_kwargs)
+
+        # Ensure full-load for rating
+        design_kwargs.pop("plr", None)
+        design_kwargs.pop("cd", None)
+        self.set_specifications(plr=1.0, cd=self.cd, **design_kwargs)
+        _, converged = self.optimize_COP(verbose=verbose, initialize=True, optimize=False)
+        if not converged:
+            raise RuntimeError("Design rating solve failed")
+
+        Q_rated = abs(value(self.model.fs.evaporator.heat_duty[0]))
+        cop_full = self.compute_model_cop(self.model)
+        self.model.fs.COP_full.set_value(cop_full)
+        self.model.fs.COP_part.set_value(cop_full)
+        return Q_rated
 
     def report_solution(self):
 

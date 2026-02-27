@@ -1,0 +1,90 @@
+--- vapor_compression.py	2026-02-23 20:49:00
++++ vapor_compression_copy.py	2026-02-23 21:00:03
+@@ -104,6 +104,11 @@
+                                  destination=self.model.fs.expansion_valve.inlet)
+         self.model.fs.expansion_valve_to_evaporator = Arc(source=self.model.fs.expansion_valve.outlet, 
+                                   destination=self.model.fs.evaporator.inlet)
++
++        # Enforce physical sign conventions
++        self.model.fs.evaporator.heat_duty[0].setlb(0)      # evaporator absorbs heat
++        self.model.fs.condenser.heat_duty[0].setub(0)       # condenser rejects heat
++        self.model.fs.compressor.work_mechanical[0].setlb(1e-6)  # compressor consumes work
+ 
+         # Expand arcs to build the connectivity
+         TransformationFactory('network.expand_arcs').apply_to(self.model)
+@@ -140,7 +145,7 @@
+ 
+         @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
+         def superheating_constraint(b):
+-            return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat + b.superheating
++            return b.control_volume.properties_out[0].temperature == b.control_volume.properties_out[0].temperature_sat + b.superheating
+         
+         self.model.fs.evaporator.superheating_constraint.deactivate()
+ 
+@@ -156,7 +161,7 @@
+ 
+         @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
+         def subcooling_constraint(b):
+-            return b.control_volume.properties_out[0].temperature <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
++            return b.control_volume.properties_out[0].temperature == b.control_volume.properties_out[0].temperature_sat - b.subcooling
+         
+         self.model.fs.condenser.subcooling_constraint.deactivate()
+ 
+@@ -826,10 +831,12 @@
+                 self.model.fs.report()
+ 
+             # Compute the COP
+-            self.model.fs.cop.set_value(
+-                self.model.fs.evaporator.heat_duty[0].value
+-                / self.model.fs.compressor.work_mechanical[0].value
+-            )
++            W = value(self.model.fs.compressor.work_mechanical[0])
++            Q = value(self.model.fs.evaporator.heat_duty[0])
++            if W is None or abs(W) < 1e-8 or Q is None:
++                self.model.fs.cop.set_value(0.0)
++            else:
++                self.model.fs.cop.set_value(Q / W)
+ 
+         self.logger.info("Setting up the optimization problem...")
+ 
+@@ -846,12 +853,12 @@
+         results = solver.solve(self.model, tee=verbose)
+ 
+         if not optimize:
+-            if (self.model.fs.compressor.work_mechanical[0].value is not None
+-                and self.model.fs.compressor.work_mechanical[0].value != 0):
+-                self.model.fs.cop.set_value(
+-                    self.model.fs.evaporator.heat_duty[0].value
+-                    / self.model.fs.compressor.work_mechanical[0].value
+-                )
++            W = value(self.model.fs.compressor.work_mechanical[0])
++            Q = value(self.model.fs.evaporator.heat_duty[0])
++            if W is None or abs(W) < 1e-8 or Q is None:
++                self.model.fs.cop.set_value(0.0)
++            else:
++                self.model.fs.cop.set_value(Q / W)
+ 
+         # Resolve if the optimizer got stuck
+         if results.solver.termination_condition != "optimal":
+@@ -886,6 +893,8 @@
+     def report_solution(self):
+ 
+         print("Optimized COP:", round(value(self.model.fs.cop),3))
++        print("COP (model):", value(self.model.fs.cop))
++        print("Carnot (actual HX temps):", self.compute_carnot())
+ 
+         n = len(self.h_init)
+ 
+@@ -928,3 +937,12 @@
+ 
+         for unit in self.unit_operations:
+             unit.report()
++
++    def compute_carnot(self):
++        Te = value(self.model.fs.evaporator.control_volume.properties_out[0].temperature)
++        Tc = value(self.model.fs.condenser.control_volume.properties_out[0].temperature)
++
++        if Te is None or Tc is None or Tc <= Te:
++            return None
++
++        return Tc / (Tc - Te)

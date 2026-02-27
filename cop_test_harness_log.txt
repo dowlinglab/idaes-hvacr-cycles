@@ -1,0 +1,72 @@
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="fs.compressor";
+  - termination condition: infeasible
+  - message from solver: Ipopt 3.13.2\x3a Converged to a locally infeasible point. Problem may be infeasible.
+2026-02-23 21:05:53 [WARNING] idaes.core.util.scaling: Missing scaling factor for fs.evaporator.control_volume.heat
+WARNING:idaes.core.util.scaling:Missing scaling factor for fs.evaporator.control_volume.heat
+2026-02-23 21:05:53 [WARNING] idaes.core.util.scaling: Missing scaling factor for fs.compressor.control_volume.work
+WARNING:idaes.core.util.scaling:Missing scaling factor for fs.compressor.control_volume.work
+2026-02-23 21:05:53 [WARNING] idaes.core.util.scaling: Missing scaling factor for fs.condenser.control_volume.heat
+WARNING:idaes.core.util.scaling:Missing scaling factor for fs.condenser.control_volume.heat
+2026-02-23 21:05:53 [WARNING] idaes.core.util.scaling: Missing scaling factor for fs.expansion_valve.control_volume.work
+WARNING:idaes.core.util.scaling:Missing scaling factor for fs.expansion_valve.control_volume.work
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: infeasible
+  - message from solver: Ipopt 3.13.2\x3a Converged to a locally infeasible point. Problem may be infeasible.
+ERROR:vapor_compression_copy:Initialization failed
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: infeasible
+  - message from solver: Ipopt 3.13.2\x3a Converged to a locally infeasible point. Problem may be infeasible.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: infeasible
+  - message from solver: Ipopt 3.13.2\x3a Converged to a locally infeasible point. Problem may be infeasible.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: infeasible
+  - message from solver: Ipopt 3.13.2\x3a Converged to a locally infeasible point. Problem may be infeasible.
+ERROR:vapor_compression_copy:Optimization failed
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+====================================================================================
+The following constraint(s) have large residuals (>1.0E-06):
+
+    fs.evaporator_to_compressor_expanded.pressure_equality[0.0]: 5.35449E-02
+
+====================================================================================
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: other
+  - message from solver: Too few degrees of freedom (rethrown)!
+ERROR:vapor_compression_copy:Initialization failed
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: other
+  - message from solver: Too few degrees of freedom (rethrown)!
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: other
+  - message from solver: Too few degrees of freedom (rethrown)!
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 16 component keys that are not exported as part of the NL file.  Skipping.
+WARNING:pyomo.repn.plugins.nl_writer:model contains export suffix 'scaling_factor' that contains 531 keys that are not Var, Constraint, Objective, or the model.  Skipping.
+WARNING:pyomo.core:Loading a SolverResults object with a warning status into model.name="unknown";
+  - termination condition: other
+  - message from solver: Too few degrees of freedom (rethrown)!
+ERROR:vapor_compression_copy:Optimization failed
+====================================================================================
+The following constraint(s) have large residuals (>1.0E-06):
+
+    fs.P_low_evap_in: 2.70165E-06
+    fs.P_low_comp_in: 5.35449E+04
+    fs.P_low_valve_out: 2.70162E-06
+    fs.P_high_comp_out: 1.98370E-03
+    fs.P_high_cond_in: 9.99641E-04
+    fs.P_high_valve_in: 1.55858E-05
+
+====================================================================================

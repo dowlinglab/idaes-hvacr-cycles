@@ -1,29 +1,34 @@
-# Import required IDAES-PSE modules
+"""Simple vapor compression cycle model using IDAES and General Helmholtz."""
+
+from enum import Enum
+import logging
+from typing import Iterable, Optional, Sequence, Tuple
+
+import CoolProp.CoolProp as CP
 from idaes.core import FlowsheetBlock
+from idaes.core.solvers import get_solver
+from idaes.core.util import DiagnosticsToolbox
+from idaes.core.util.initialization import propagate_state
+from idaes.core.util.scaling import calculate_scaling_factors
 from idaes.models.properties.general_helmholtz import (
+    AmountBasis,
     HelmholtzParameterBlock,
     PhaseType,
     StateVars,
-    AmountBasis,
 )
-from idaes.models.unit_models import (Heater, Turbine, Compressor, 
-                                      Mixer, Separator, PressureChanger,
-                                      Valve)
-from idaes.core.solvers import get_solver
-from idaes.core.util.model_statistics import degrees_of_freedom
-from idaes.core.util.scaling import calculate_scaling_factors
-from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory, Param, Var
-from idaes.core.util.initialization import propagate_state
-from pyomo.network import Arc
-from pyomo.environ import units as pyunits
-import numpy as np
+from idaes.models.unit_models import Compressor, Heater, PressureChanger
 import matplotlib.pyplot as plt
-
-import logging
-import CoolProp.CoolProp as CP
-
-from idaes.core.util import DiagnosticsToolbox
-from enum import Enum
+import numpy as np
+from pyomo.environ import (
+    ConcreteModel,
+    Param,
+    TransformationFactory,
+    Var,
+    maximize,
+    value,
+)
+from pyomo.environ import units as pyunits
+from pyomo.network import Arc
 
 class Mode(Enum):
     ORIGINAL_TPX = "original_TPx"
@@ -34,19 +39,17 @@ class Mode(Enum):
 C_to_K = 273.15
 
 class SimpleVaporCompressionCycle:
+    """Simple vapor compression cycle flowsheet wrapper."""
 
-
-
-    def __init__(self,fluid_name, compressor_efficiency=0.6, mode=Mode.IMPROVED_TPX):
-        ''' Simple Vapor Compression Cycle
+    def __init__(self, fluid_name, compressor_efficiency=0.75, mode=Mode.IMPROVED_TPX):
+        """Construct a vapor compression cycle model.
 
         Parameters:
             fluid_name : str
-                Name of the fluid
+                Name of the fluid.
             compressor_efficiency : float
-                Isentropic efficiency of the compressor
-        
-        '''
+                Isentropic efficiency of the compressor.
+        """
 
         self.fluid_name = fluid_name
 
@@ -72,6 +75,7 @@ class SimpleVaporCompressionCycle:
         assert 0 < compressor_efficiency < 1, "Compressor efficiency must be between 0 and 1"
         self.compressor_efficiency = compressor_efficiency
 
+        self.last_termination_condition = None
         self.optimization_converged = None
         
         self._define_flowsheet()
@@ -88,22 +92,32 @@ class SimpleVaporCompressionCycle:
         self.model.fs.compressor = Compressor(property_package=self.model.fs.properties)
         self.model.fs.condenser = Heater(property_package=self.model.fs.properties)
 
-        self.model.fs.expansion_valve = PressureChanger(property_package=self.model.fs.properties, 
-                                thermodynamic_assumption="adiabatic",
-                                compressor=False)
+        self.model.fs.expansion_valve = PressureChanger(
+            property_package=self.model.fs.properties,
+            thermodynamic_assumption="adiabatic",
+            compressor=False,
+        )
 
         # Let's use a valve instead of a pressure changer
         # self.model.fs.expansion_valve = Valve(property_package=self.model.fs.properties)
                             
         # Connect components with arcs
-        self.model.fs.evaporator_to_compressor = Arc(source=self.model.fs.evaporator.outlet, 
-                                 destination=self.model.fs.compressor.inlet)
-        self.model.fs.compressor_to_condenser = Arc(source=self.model.fs.compressor.outlet, 
-                                destination=self.model.fs.condenser.inlet)
-        self.model.fs.condenser_to_expansion_valve = Arc(source=self.model.fs.condenser.outlet, 
-                                 destination=self.model.fs.expansion_valve.inlet)
-        self.model.fs.expansion_valve_to_evaporator = Arc(source=self.model.fs.expansion_valve.outlet, 
-                                  destination=self.model.fs.evaporator.inlet)
+        self.model.fs.evaporator_to_compressor = Arc(
+            source=self.model.fs.evaporator.outlet,
+            destination=self.model.fs.compressor.inlet,
+        )
+        self.model.fs.compressor_to_condenser = Arc(
+            source=self.model.fs.compressor.outlet,
+            destination=self.model.fs.condenser.inlet,
+        )
+        self.model.fs.condenser_to_expansion_valve = Arc(
+            source=self.model.fs.condenser.outlet,
+            destination=self.model.fs.expansion_valve.inlet,
+        )
+        self.model.fs.expansion_valve_to_evaporator = Arc(
+            source=self.model.fs.expansion_valve.outlet,
+            destination=self.model.fs.evaporator.inlet,
+        )
 
         # Expand arcs to build the connectivity
         TransformationFactory('network.expand_arcs').apply_to(self.model)
@@ -122,7 +136,9 @@ class SimpleVaporCompressionCycle:
         self.model.fs.COP = Objective(expr=(self.model.fs.evaporator.heat_duty[0]) /
                                 (self.model.fs.compressor.work_mechanical[0]), sense=maximize)
         '''
-        self.model.fs.cop = Var(initialize=1, units=pyunits.dimensionless, bounds=(0.1, 100))
+        self.model.fs.cop = Var(
+            initialize=1, units=pyunits.dimensionless, bounds=(0.1, 100)
+        )
 
         @self.model.fs.Constraint(doc="COP constraint")
         def compute_cop(b):
@@ -140,7 +156,10 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.evaporator.Constraint(doc="Superheat evaporator outlet")
         def superheating_constraint(b):
-            return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat + b.superheating
+            return (
+                b.control_volume.properties_out[0].temperature
+                >= b.control_volume.properties_out[0].temperature_sat + b.superheating
+            )
         
         self.model.fs.evaporator.superheating_constraint.deactivate()
 
@@ -156,19 +175,28 @@ class SimpleVaporCompressionCycle:
 
         @self.model.fs.condenser.Constraint(doc="Subcool condenser outlet") 
         def subcooling_constraint(b):
-            return b.control_volume.properties_out[0].temperature <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
+            return (
+                b.control_volume.properties_out[0].temperature
+                <= b.control_volume.properties_out[0].temperature_sat - b.subcooling
+            )
         
         self.model.fs.condenser.subcooling_constraint.deactivate()
 
         @self.model.fs.condenser.Constraint(doc="Condenser saturation temperature setpoint (sat = ambient + approach)")
         def approach_constraint(b):
-            return b.control_volume.properties_out[0].temperature_sat == b.ambient_T + b.approach_T
+            return (
+                b.control_volume.properties_out[0].temperature_sat
+                == b.ambient_T + b.approach_T
+            )
 
         self.model.fs.condenser.approach_constraint.deactivate()
 
         @self.model.fs.compressor.Constraint(doc="Must be a vapor")
         def vapor_constraint(b):
-            return b.control_volume.properties_out[0].temperature >= b.control_volume.properties_out[0].temperature_sat
+            return (
+                b.control_volume.properties_out[0].temperature
+                >= b.control_volume.properties_out[0].temperature_sat
+            )
             # return b.outlet.pressure[0]/1e3 >= b.control_volume.properties_out[0].pressure_sat/1e3
 
         self.model.fs.compressor.vapor_constraint.deactivate()
@@ -243,10 +271,11 @@ class SimpleVaporCompressionCycle:
 
         ## Temperature Bounds (needed for PH state variables)
 
-        units = [self.model.fs.evaporator, 
-                 self.model.fs.compressor,
-                 self.model.fs.condenser,
-                 self.model.fs.expansion_valve
+        units = [
+            self.model.fs.evaporator,
+            self.model.fs.compressor,
+            self.model.fs.condenser,
+            self.model.fs.expansion_valve,
         ]
 
         for u in units:
@@ -276,20 +305,19 @@ class SimpleVaporCompressionCycle:
         self.model.fs.properties.ts_diagram()
         plt.show()
 
-    def specify_initial_conditions(self,
-                                   low_side_temperature = -20, # degC
-                                   high_side_temperature = 30 # degC
+    def specify_initial_conditions(
+        self,
+        low_side_temperature=-20,  # degC
+        high_side_temperature=30,  # degC
     ):
-    
-        ''' Specify initial conditions for the
+        """Specify initial conditions for the cycle.
 
         Arguments:
             low_side_temperature : float
                 Low side temperature in degC
             high_side_temperature : float
                 High side temperature in degC
-
-        '''
+        """
 
         # Convert temperatures to Kelvin
         low_side_temperature += C_to_K
@@ -333,23 +361,26 @@ class SimpleVaporCompressionCycle:
             3: Expansion Valve
         '''
 
-        self.h_init = np.array([low_side_vapor_H, # Evaporator
-                       high_side_vapor_H, # Compressor
-                       high_side_liquid_H, # Condenser 
-                       low_side_liquid_H# Expansion Valve
-                       ]) 
+        self.h_init = np.array([
+            low_side_vapor_H,  # Evaporator
+            high_side_vapor_H,  # Compressor
+            high_side_liquid_H,  # Condenser
+            low_side_liquid_H,  # Expansion Valve
+        ])
         
-        self.p_init = np.array([low_side_pressure,
-                       high_side_pressure,
-                       high_side_pressure,
-                       low_side_pressure
-                       ])
+        self.p_init = np.array([
+            low_side_pressure,
+            high_side_pressure,
+            high_side_pressure,
+            low_side_pressure,
+        ])
         
-        self.T_init = np.array([low_side_temperature + superheat, # Evaporator
-                       high_side_temperature + superheat, # Compressor
-                       high_side_temperature - subcool, # Condenser
-                       low_side_temperature # Expansion valve
-                       ])
+        self.T_init = np.array([
+            low_side_temperature + superheat,  # Evaporator
+            high_side_temperature + superheat,  # Compressor
+            high_side_temperature - subcool,  # Condenser
+            low_side_temperature,  # Expansion valve
+        ])
 
         self.model.fs.properties.hp_diagram()
         plt.plot(self.h_init/1000, self.p_init/1000, 'ko')
@@ -370,7 +401,7 @@ class SimpleVaporCompressionCycle:
         plt.show()  
 
     def initialize(self, verbose=False):
-        ''' Initialize the flowsheet '''
+        """Initialize the flowsheet."""
 
 
         # p_init has units of Pa, hence the scale factor is 1 to get Pa
@@ -408,7 +439,7 @@ class SimpleVaporCompressionCycle:
         self.model.fs.compressor.outlet.pressure[0].fix(self.p_init[1]*p_scale) # Set to target
         # self.model.fs.compressor.outlet.vapor_frac[0].fix(1.0)  # Ensure vapor phase
 
-        self.model.fs.compressor.efficiency_isentropic[0].fix(self.compressor_efficiency)
+        self.model.fs.compressor.efficiency_isentropic.fix(self.compressor_efficiency)
 
         self.logger.info("Initializing compressor...")
         self.model.fs.compressor.initialize(outlvl=logging.WARNING)
@@ -454,29 +485,35 @@ class SimpleVaporCompressionCycle:
             print("\nFinished initialization. Stream summary:")
             self.model.fs.report()
 
-    def set_specifications(self,
-                           low_side_pressure = (200, 500), # kPa
-                           high_side_pressure = (1000, 3000), # kPa
-                           evaporator_temperature = (-20, 0), # degC
-                           compressor_temperature = None, # degC
-                           condenser_temperature = (30, 50), # degC
-                           expansion_valve_temperature = None, # degC
-                           subcooling = 3, # degC
-                           superheating = 3, # degC
-                           max_pressure_ratio = 4,
-                           ambient_temperature = None, # degC
-                           condenser_approach = None, # degC
-                           evap_sat_temperature = None, # degC
-                           debug_disable_arc_pressure_eq = False
-                           ):
-        # print(superheating)
+    def set_specifications(
+        self,
+        low_side_pressure=(200, 500),  # kPa
+        high_side_pressure=(1000, 3000),  # kPa
+        evaporator_temperature=(-20, 0),  # degC
+        compressor_temperature=None,  # degC
+        condenser_temperature=(30, 50),  # degC
+        expansion_valve_temperature=None,  # degC
+        subcooling=10,  # degC
+        superheating=10,  # degC
+        max_pressure_ratio=4,
+        ambient_temperature=None,  # degC
+        condenser_approach=None,  # degC
+        evap_sat_temperature=None,  # degC
+        debug_disable_arc_pressure_eq=False,
+    ):
+        
         assert superheating >= 0, "Superheating must be greater than or equal to 0"
         assert subcooling >= 0, "Subcooling must be greater than or equal to 0"
         assert max_pressure_ratio > 1.2, "Maximum pressure ratio must be greater than 1.2"
         # assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
 
         ## Unfix the conditions from initialization
-        self.unit_operations = [self.model.fs.evaporator, self.model.fs.compressor, self.model.fs.condenser, self.model.fs.expansion_valve]
+        self.unit_operations = [
+            self.model.fs.evaporator,
+            self.model.fs.compressor,
+            self.model.fs.condenser,
+            self.model.fs.expansion_valve,
+        ]
 
         for unit in self.unit_operations:
             # Unfix all variables
@@ -721,12 +758,13 @@ class SimpleVaporCompressionCycle:
                 self.model.fs.P_high_target.set_value(P_high)
                 self.model.fs.P_high.set_value(P_high)
 
-            for arc in [
+            arcs = [
                 self.model.fs.evaporator_to_compressor_expanded,
                 self.model.fs.compressor_to_condenser_expanded,
                 self.model.fs.condenser_to_expansion_valve_expanded,
                 self.model.fs.expansion_valve_to_evaporator_expanded,
-            ]:
+            ]
+            for arc in arcs:
                 if hasattr(arc, "pressure_equality"):
                     arc.pressure_equality.deactivate()
 
@@ -743,12 +781,13 @@ class SimpleVaporCompressionCycle:
             self.model.fs.P_high_valve_in.activate()
         else:
             # Keep arc pressure equalities; deactivate explicit pressure-level constraints
-            for arc in [
+            arcs = [
                 self.model.fs.evaporator_to_compressor_expanded,
                 self.model.fs.compressor_to_condenser_expanded,
                 self.model.fs.condenser_to_expansion_valve_expanded,
                 self.model.fs.expansion_valve_to_evaporator_expanded,
-            ]:
+            ]
+            for arc in arcs:
                 if hasattr(arc, "pressure_equality"):
                     arc.pressure_equality.activate()
             self.model.fs.P_low_target_constraint.deactivate()
@@ -804,6 +843,7 @@ class SimpleVaporCompressionCycle:
         calculate_scaling_factors(self.model)
 
     def optimize_COP(self, verbose, initialize=True, optimize=True):
+        """Optimize or evaluate COP for the current specifications."""
 
         solver = get_solver()
         solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver':'ma57'} # relax the tolerance
@@ -879,6 +919,7 @@ class SimpleVaporCompressionCycle:
             self.model.fs.report()
 
         # Save the status
+        self.last_termination_condition = results.solver.termination_condition
         self.optimization_converged = optimization_converged
 
         return value(self.model.fs.cop), optimization_converged
