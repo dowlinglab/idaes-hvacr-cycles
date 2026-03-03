@@ -547,3 +547,26 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   - plot: `diagnostics/honeywell_vs_model_both_tuned_full49_20260303_plot.png`
   - convergence: bubble `49/49`, dew `49/49`
   - MAPE: bubble `1.122370545963%`, dew `1.021220878991%`, simple average-pressure MAPE `1.071795712477%`.
+- 2026-03-03: Generated new R515B saturation-dome package using branch-specific tuned solver profiles
+  (bubble profile for bubble branch; dew profile for dew branch) with no EOS/science changes:
+  - raw branch CSVs:
+    - `verification/r515b_true_vle_bubble_dome_branch_tuned_20260303.csv`
+    - `verification/r515b_true_vle_dew_dome_branch_tuned_20260303.csv`
+  - metadata:
+    - `verification/r515b_true_vle_dome_branch_tuned_metadata_20260303.json`
+  - postprocessed diagnostics:
+    - `verification/r515b_true_vle_diagnostics_dome_branch_tuned_20260303.csv`
+    - `verification/r515b_true_vle_converged_only_dome_branch_tuned_20260303.csv`
+    - `verification/r515b_dome_crossovers_branch_tuned_20260303.csv`
+  - figures:
+    - `verification/r515b_true_vle_envelope_clean_dome_branch_tuned_20260303.png`
+    - `verification/r515b_true_vle_envelope_with_failures_dome_branch_tuned_20260303.png`
+    - `verification/r515b_true_vle_pt_overlay_dome_branch_tuned_20260303.png`
+    - `verification/r515b_true_vle_ht_overlay_dome_branch_tuned_20260303.png`
+    - `verification/r515b_true_vle_ph_colored_dome_branch_tuned_20260303.png`
+  Run summary: bubble `200/200` converged, dew `200/200` converged, crossover count `0`.
+- 2026-03-03: User requested no postprocessing dependency for dome interpretation.
+  Generated direct raw dome visualization from branch CSV outputs only (no postprocess transformations):
+  `verification/r515b_true_vle_envelope_raw_nopostprocess_20260303.png`.
+  Raw-plot source branches: `verification/r515b_true_vle_bubble_dome_branch_tuned_20260303.csv`,
+  `verification/r515b_true_vle_dew_dome_branch_tuned_20260303.csv` (both `200/200` converged).
