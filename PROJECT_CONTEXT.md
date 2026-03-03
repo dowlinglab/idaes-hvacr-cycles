@@ -488,3 +488,62 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   `max_abs_diff_reducing=0`, `max_abs_diff_departure=0`, `flag_error_gt_1e-10=False` against Bell (2023) Table 7 literals currently encoded in code.
 - Quick conclusion: under current no-science-change model, Honeywell PT bubble/dew MAPE remains ~16%; no parameter-load mismatch was detected in the Bell pair constants/coefficient dump.
 - Next action: keep EOS parameters unchanged; if lower MAPE is required, proceed via approved scientific path (reference-tool baseline on an environment with working mixture saturation calls and/or model-parameter recalibration).
+
+- 2026-03-03: Per user-directed sensitivity check, excluded the lowest Honeywell PT point (`T=-19.22 C`, `P_ref=100 kPa`) and recomputed comparison metrics on the remaining 48 points (no solver/model changes).
+  Filtered outputs:
+  - `diagnostics/honeywell_vs_model_bubble_excl_minus19_20260303.csv`
+  - `diagnostics/honeywell_vs_model_dew_excl_minus19_20260303.csv`
+  Results:
+  - bubble: convergence `48/48`, MAPE `15.087850599234%` (from `16.418081620111%` on 49-point set)
+  - dew: convergence `48/48`, MAPE `14.619388230673%`
+  Interpretation: excluding `-19.22 C` improves MAPE modestly, but error remains well above single-digit threshold.
+- 2026-03-03: User-directed solver-only tuning attempt (explicitly no science edits) expanded least-squares controls in `mixture_true_vle_copy.py`:
+  added configurable `LSQ_FTOL`, `LSQ_XTOL`, `LSQ_GTOL`, `LSQ_LOSS`, `LSQ_F_SCALE` (equations/parameters unchanged).
+- 2026-03-03: Randomized solver hyperparameter search on Honeywell bubble PT objective (`w1=0.911`, full 49-point set):
+  results file: `diagnostics/solver_tuning_bubble_randomsearch_20260303.csv`.
+  Best candidate found:
+  `method='trf'`, `diff_step=1e-6`, `max_nfev=800`, `x_scale=1.0`,
+  `loss='cauchy'`, `f_scale=10.0`, `ftol=xtol=gtol=1e-14`.
+  Bubble validation CSV: `diagnostics/honeywell_vs_model_bubble_solver_tuned_20260303.csv`.
+  Bubble outcome: convergence `49/49`, MAPE `1.122370545966%` (and `1.050552283380%` excluding `-19.22 C`).
+- 2026-03-03: Same tuned solver profile tested on dew branch:
+  CSV `diagnostics/honeywell_vs_model_dew_solver_tuned_20260303.csv`,
+  convergence `49/49` but MAPE `63.178603412185%`.
+  Interpretation: this solver profile is bubble-objective-specific and degrades dew consistency; defaults were not switched globally pending user decision.
+- 2026-03-03: Updated density variable mapping in `mixture_true_vle_copy.py` from exponential transform to bounded scaled-sigmoid transform (user-requested stability exploration; no EOS parameter/formula changes).
+  New parameterization:
+  - `rho_v = lo_v + (hi_v-lo_v)*sigmoid(u0)`
+  - `drho  = lo_d + (hi_d-lo_d)*sigmoid(u1)`
+  - `rho_l = rho_v + drho` with existing physical ordering/caps.
+  Implemented bounds correspond to user-selected upper density target near `2 g/cc` (conservative molar bounds:
+  `RHO_MAP_MIN_MOLM3=5.0`, `RHO_MAP_MAX_MOLM3=2.0e4`, `DRHO_MAP_MIN_MOLM3=1.0`, `DRHO_MAP_MAX_MOLM3=2.0e4`).
+  Validation run with bubble-tuned solver profile:
+  `diagnostics/honeywell_vs_model_bubble_sigmoidmap_20260303.csv` =>
+  convergence `49/49`, MAPE `1.122370545963%` (effectively unchanged vs prior bubble-tuned mapping).
+- 2026-03-03: Dew validation with scaled-sigmoid mapping and same tuned solver profile:
+  `diagnostics/honeywell_vs_model_dew_sigmoidmap_20260303.csv` =>
+  convergence `49/49`, MAPE `15.880078702165%` on 49 points and
+  `14.619388230673%` excluding `-19.22 C`.
+  Interpretation: scaled-sigmoid mapping itself does not fix dew-vs-Honeywell mismatch; dew branch remains materially higher-error than bubble under current no-science-change model.
+- 2026-03-03: User requested dew hyperparameter search excluding the `-19.22 C` point; bubble settings kept unchanged.
+  Dew-only search artifact:
+  `diagnostics/solver_tuning_dewonly_excl_minus19_randomsearch_20260303.csv`.
+  Best dew profile found:
+  `LSQ_METHOD='trf'`, `LSQ_DIFF_STEP=1e-8`, `LSQ_MAX_NFEV=800`, `LSQ_X_SCALE=2.0`,
+  `LSQ_LOSS='huber'`, `LSQ_F_SCALE=3.0`, `LSQ_FTOL=LSQ_XTOL=LSQ_GTOL=1e-10`.
+  Validation CSV using that profile on 48-point set:
+  `diagnostics/honeywell_vs_model_dew_tuned_excl_minus19_20260303.csv`.
+  Dew result: convergence `48/48`, MAPE `0.971571003176%`.
+  Plot artifact:
+  `diagnostics/honeywell_vs_model_dew_tuned_excl_minus19_20260303_plot.png`.
+- 2026-03-03: Tested the same dew-tuned profile with `-19.22 C` added back (full 49-point Honeywell set):
+  - CSV: `diagnostics/honeywell_vs_model_dew_tuned_full49_20260303.csv`
+  - plot: `diagnostics/honeywell_vs_model_dew_tuned_full49_20260303_plot.png`
+  - convergence `49/49`, MAPE `1.021220878991%` (vs `0.971571003176%` on 48-point subset; delta `+0.049649875815` points).
+  - `-19.22 C` row under this profile: `P_model=103.404415 kPa` vs `P_ref=100 kPa` (`+3.404415%`).
+- 2026-03-03: Generated combined both-branch tuned comparison package on full 49-point Honeywell grid
+  (bubble uses bubble-tuned profile; dew uses dew-tuned profile):
+  - CSV: `diagnostics/honeywell_vs_model_both_tuned_full49_20260303.csv`
+  - plot: `diagnostics/honeywell_vs_model_both_tuned_full49_20260303_plot.png`
+  - convergence: bubble `49/49`, dew `49/49`
+  - MAPE: bubble `1.122370545963%`, dew `1.021220878991%`, simple average-pressure MAPE `1.071795712477%`.

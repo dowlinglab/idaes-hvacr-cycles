@@ -53,10 +53,22 @@ from linear_model_codex import (
 EPS_X = 1e-12
 RHO_MIN_MOLM3 = 1e-9
 RHO_MAX_MOLM3 = 2.0e4
+# Scaled-sigmoid bounds for density parameterization.
+# 0.001..2.0 g/cc ~= 1..2000 kg/m^3 mapped to molar-density bounds using
+# conservative component MW limits for R1234ze/R227ea.
+RHO_MAP_MIN_MOLM3 = 5.0
+RHO_MAP_MAX_MOLM3 = 2.0e4
+DRHO_MAP_MIN_MOLM3 = 1.0
+DRHO_MAP_MAX_MOLM3 = 2.0e4
 LSQ_DIFF_STEP = 1e-7
 LSQ_MAX_NFEV = 800
 LSQ_METHOD = "trf"
 LSQ_X_SCALE = 1.0
+LSQ_FTOL = 1.0e-12
+LSQ_XTOL = 1.0e-12
+LSQ_GTOL = 1.0e-12
+LSQ_LOSS = "linear"
+LSQ_F_SCALE = 1.0
 
 
 @dataclass
@@ -540,6 +552,116 @@ def _sigmoid(z: float) -> float:
     return float(ez / (1.0 + ez))
 
 
+def _logit_from_unit_interval(y: float) -> float:
+    """
+    Purpose
+    -------
+    Map y in (0,1) to unconstrained real via logit.
+
+    Inputs
+    ------
+    y : float [unitless]
+
+    Outputs
+    -------
+    z : float [unitless]
+
+    Assumptions
+    -----------
+    - y represents a bounded normalized variable.
+
+    Failure modes
+    -------------
+    - None; y is clipped into open interval to avoid log singularities.
+
+    References
+    ----------
+    - Standard logistic/logit transform pair.
+
+    Notes on numerical stability
+    ----------------------------
+    - Clips away from exactly 0/1 to avoid inf values.
+    """
+    yc = min(max(float(y), 1.0e-12), 1.0 - 1.0e-12)
+    return float(np.log(yc / (1.0 - yc)))
+
+
+def _scaled_sigmoid(z: float, lo: float, hi: float) -> float:
+    """
+    Purpose
+    -------
+    Map unconstrained z to bounded interval [lo, hi] using sigmoid scaling.
+
+    Inputs
+    ------
+    z : float [unitless]
+    lo : float [physical units]
+    hi : float [physical units]
+
+    Outputs
+    -------
+    x : float [physical units]
+
+    Assumptions
+    -----------
+    - hi > lo.
+
+    Failure modes
+    -------------
+    - Raises ValueError if interval is invalid.
+
+    References
+    ----------
+    - Bounded variable transforms for nonlinear least squares.
+
+    Notes on numerical stability
+    ----------------------------
+    - Stable for large |z| due sigmoid implementation in _sigmoid.
+    """
+    if not (hi > lo):
+        raise ValueError("scaled-sigmoid requires hi > lo")
+    return float(lo + (hi - lo) * _sigmoid(z))
+
+
+def _inverse_scaled_sigmoid(x: float, lo: float, hi: float) -> float:
+    """
+    Purpose
+    -------
+    Map bounded physical x in [lo, hi] to unconstrained z for solver seeding.
+
+    Inputs
+    ------
+    x : float [physical units]
+    lo : float [physical units]
+    hi : float [physical units]
+
+    Outputs
+    -------
+    z : float [unitless]
+
+    Assumptions
+    -----------
+    - hi > lo.
+
+    Failure modes
+    -------------
+    - Raises ValueError if interval is invalid.
+
+    References
+    ----------
+    - Inverse logistic transform (logit).
+
+    Notes on numerical stability
+    ----------------------------
+    - Clips normalized coordinate to avoid infinities at interval bounds.
+    """
+    if not (hi > lo):
+        raise ValueError("inverse scaled-sigmoid requires hi > lo")
+    x_clip = min(max(float(x), lo), hi)
+    y = (x_clip - lo) / (hi - lo)
+    return _logit_from_unit_interval(y)
+
+
 def _safe_residual_vector(vals: np.ndarray) -> np.ndarray:
     """
     Purpose
@@ -592,8 +714,8 @@ def _rho_param_to_states(u0: float, u1: float) -> Tuple[float, float]:
 
     Assumptions
     -----------
-    - u0 controls rho_v via exp transform.
-    - u1 controls rho_l-rho_v via exp transform.
+    - u0 controls rho_v via scaled-sigmoid transform.
+    - u1 controls rho_l-rho_v via scaled-sigmoid transform.
 
     Failure modes
     -------------
@@ -607,10 +729,8 @@ def _rho_param_to_states(u0: float, u1: float) -> Tuple[float, float]:
     ----------------------------
     - Enforces positivity and strict ordering rho_l > rho_v.
     """
-    rho_v = float(np.exp(u0))
-    drho = float(np.exp(u1))
-    rho_v = min(max(rho_v, RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.95)
-    drho = min(max(drho, RHO_MIN_MOLM3), RHO_MAX_MOLM3)
+    rho_v = _scaled_sigmoid(float(u0), RHO_MAP_MIN_MOLM3, RHO_MAP_MAX_MOLM3)
+    drho = _scaled_sigmoid(float(u1), DRHO_MAP_MIN_MOLM3, DRHO_MAP_MAX_MOLM3)
     rho_l = min(max(rho_v + drho, rho_v * (1.0 + 1.0e-8)), RHO_MAX_MOLM3)
     rho_v = min(rho_v, rho_l * (1.0 - 1.0e-8))
     return rho_l, rho_v
@@ -684,20 +804,29 @@ def solve_bubble_at_t(
         rho_l_seed = min(max(float(rho_l_seed_in), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
         dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
         y1_seed = _clip_x(y1_seed_in)
-        u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(y1_seed / (1.0 - y1_seed))], dtype=float)
-        lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
-        ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+        u0 = np.array(
+            [
+                _inverse_scaled_sigmoid(rho_v_seed, RHO_MAP_MIN_MOLM3, RHO_MAP_MAX_MOLM3),
+                _inverse_scaled_sigmoid(dr_seed, DRHO_MAP_MIN_MOLM3, DRHO_MAP_MAX_MOLM3),
+                np.log(y1_seed / (1.0 - y1_seed)),
+            ],
+            dtype=float,
+        )
+        lb = np.array([-30.0, -30.0, -30.0], dtype=float)
+        ub = np.array([30.0, 30.0, 30.0], dtype=float)
         sol = least_squares(
             res,
             u0,
             bounds=(lb, ub),
             method=LSQ_METHOD,
-            ftol=1.0e-12,
-            xtol=1.0e-12,
-            gtol=1.0e-12,
+            ftol=LSQ_FTOL,
+            xtol=LSQ_XTOL,
+            gtol=LSQ_GTOL,
             max_nfev=LSQ_MAX_NFEV,
             x_scale=LSQ_X_SCALE,
             diff_step=LSQ_DIFF_STEP,
+            loss=LSQ_LOSS,
+            f_scale=LSQ_F_SCALE,
         )
         rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
         y1 = _clip_x(_sigmoid(float(sol.x[2])))
@@ -815,20 +944,29 @@ def solve_dew_at_t(
         rho_l_seed = min(max(float(rho_l_seed_in), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
         dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
         x1_seed = _clip_x(x1_seed_in)
-        u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(x1_seed / (1.0 - x1_seed))], dtype=float)
-        lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
-        ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+        u0 = np.array(
+            [
+                _inverse_scaled_sigmoid(rho_v_seed, RHO_MAP_MIN_MOLM3, RHO_MAP_MAX_MOLM3),
+                _inverse_scaled_sigmoid(dr_seed, DRHO_MAP_MIN_MOLM3, DRHO_MAP_MAX_MOLM3),
+                np.log(x1_seed / (1.0 - x1_seed)),
+            ],
+            dtype=float,
+        )
+        lb = np.array([-30.0, -30.0, -30.0], dtype=float)
+        ub = np.array([30.0, 30.0, 30.0], dtype=float)
         sol = least_squares(
             res,
             u0,
             bounds=(lb, ub),
             method=LSQ_METHOD,
-            ftol=1.0e-12,
-            xtol=1.0e-12,
-            gtol=1.0e-12,
+            ftol=LSQ_FTOL,
+            xtol=LSQ_XTOL,
+            gtol=LSQ_GTOL,
             max_nfev=LSQ_MAX_NFEV,
             x_scale=LSQ_X_SCALE,
             diff_step=LSQ_DIFF_STEP,
+            loss=LSQ_LOSS,
+            f_scale=LSQ_F_SCALE,
         )
         rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
         x1 = _clip_x(_sigmoid(float(sol.x[2])))
