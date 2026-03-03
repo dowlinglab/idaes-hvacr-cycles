@@ -1,0 +1,15 @@
+{
+  "fluid": "r1234ze",
+  "Tmin_K": 240.0,
+  "Tmax_K": 372.0,
+  "n_points_requested": 120,
+  "n_points_solved": 119,
+  "tol": 1e-10,
+  "maxiter": 50,
+  "critical_reached": true,
+  "Tc_K": 382.513,
+  "outputs": {
+    "csv": "verification/dome_r1234ze.csv",
+    "fig": "verification/ph_dome_r1234ze.png"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "fluid": "r1234ze",
+  "Tmin_K": 240.0,
+  "Tmax_K": 372.0,
+  "n_points_requested": 200,
+  "n_points_attempted": 200,
+  "n_points_converged": 199,
+  "n_points_failed": 1,
+  "tol": 1e-10,
+  "acceptance_r_P": 1e-06,
+  "acceptance_r_mu": 1e-06,
+  "maxiter": 50,
+  "critical_reached": false,
+  "Tc_K": 382.513,
+  "log_file": "verification/log_saturation_solver.txt",
+  "generated_at_utc": "2026-03-02T21:35:28.932838+00:00"
+}

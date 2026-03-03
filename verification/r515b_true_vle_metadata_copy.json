@@ -1,0 +1,15 @@
+{
+  "fluid1": "r1234ze",
+  "fluid2": "r227ea",
+  "w1_kgkg": 0.911,
+  "z1_molmol": 0.9385037942295681,
+  "Tmin_K": 250.0,
+  "Tmax_K": 360.0,
+  "n_points": 40,
+  "bubble_converged": 38,
+  "bubble_failed": 2,
+  "dew_converged": 19,
+  "dew_failed": 21,
+  "generated_at_utc": "2026-03-02T21:54:10.006931+00:00",
+  "method": "P equality + mu1/mu2 equality, FD chemical potentials from A(T,V,n1,n2)"
+}
