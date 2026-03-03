@@ -1,0 +1,14 @@
+Bell 2023 pair parameters used (full precision)
+beta_T=1.001247
+beta_v=0.9929
+gamma_T=0.98917999999999995
+gamma_v=1.0015810000000001
+departure_coeffs (n,t,d,l):
+  (-0.057178, 1.2902979999999999, 1, 1)
+  (0.031317999999999999, 0.038795999999999997, 2, 1)
+  (-0.027496, 2.6405319999999999, 3, 1)
+
+Mismatch checks vs Bell(2023) Table 7 literals:
+max_abs_diff_reducing=0
+max_abs_diff_departure=0
+flag_error_gt_1e-10=False

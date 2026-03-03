@@ -679,50 +679,72 @@ def solve_bubble_at_t(
         except Exception:
             return np.array([1.0e6, 1.0e6, 1.0e6], dtype=float)
 
-    rho_v_seed = min(max(float(rho_v0), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
-    rho_l_seed = min(max(float(rho_l0), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
-    dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
-    y10 = _clip_x(y10)
-    u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(y10 / (1.0 - y10))], dtype=float)
-    lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
-    ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
-    sol = least_squares(
-        res,
-        u0,
-        bounds=(lb, ub),
-        method=LSQ_METHOD,
-        ftol=1.0e-12,
-        xtol=1.0e-12,
-        gtol=1.0e-12,
-        max_nfev=LSQ_MAX_NFEV,
-        x_scale=LSQ_X_SCALE,
-        diff_step=LSQ_DIFF_STEP,
-    )
+    def _attempt(rho_l_seed_in: float, rho_v_seed_in: float, y1_seed_in: float) -> Dict:
+        rho_v_seed = min(max(float(rho_v_seed_in), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
+        rho_l_seed = min(max(float(rho_l_seed_in), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
+        dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
+        y1_seed = _clip_x(y1_seed_in)
+        u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(y1_seed / (1.0 - y1_seed))], dtype=float)
+        lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
+        ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+        sol = least_squares(
+            res,
+            u0,
+            bounds=(lb, ub),
+            method=LSQ_METHOD,
+            ftol=1.0e-12,
+            xtol=1.0e-12,
+            gtol=1.0e-12,
+            max_nfev=LSQ_MAX_NFEV,
+            x_scale=LSQ_X_SCALE,
+            diff_step=LSQ_DIFF_STEP,
+        )
+        rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
+        y1 = _clip_x(_sigmoid(float(sol.x[2])))
+        st_l = mix_state(d1, d2, t_k, rho_l, z1)
+        st_v = mix_state(d1, d2, t_k, rho_v, y1)
+        mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, z1)
+        mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, y1)
+        r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
+        r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
+        ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
+        return {
+            "status": "CONVERGED" if ok else "DIVERGED",
+            "T_K": float(t_k),
+            "P_Pa": float(0.5 * (st_l.p_pa + st_v.p_pa)),
+            "rho_l_molm3": float(rho_l),
+            "rho_v_molm3": float(rho_v),
+            "x1_liq": float(z1),
+            "y1_vap": float(y1),
+            "h_l_Jmol": float(st_l.h_jmol),
+            "h_v_Jmol": float(st_v.h_jmol),
+            "r_P": float(r_p),
+            "r_mu": float(r_mu),
+            "iterations": int(sol.nfev),
+            "notes": str(sol.message),
+        }
 
-    rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
-    y1 = _clip_x(_sigmoid(float(sol.x[2])))
-    st_l = mix_state(d1, d2, t_k, rho_l, z1)
-    st_v = mix_state(d1, d2, t_k, rho_v, y1)
-    mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, z1)
-    mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, y1)
-    r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
-    r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
-    ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
-    return {
-        "status": "CONVERGED" if ok else "DIVERGED",
-        "T_K": float(t_k),
-        "P_Pa": float(0.5 * (st_l.p_pa + st_v.p_pa)),
-        "rho_l_molm3": float(rho_l),
-        "rho_v_molm3": float(rho_v),
-        "x1_liq": float(z1),
-        "y1_vap": float(y1),
-        "h_l_Jmol": float(st_l.h_jmol),
-        "h_v_Jmol": float(st_v.h_jmol),
-        "r_P": float(r_p),
-        "r_mu": float(r_mu),
-        "iterations": int(sol.nfev),
-        "notes": str(sol.message),
-    }
+    y10 = _clip_x(y10)
+    attempts = [
+        (rho_l0, rho_v0, y10),
+        (1.1 * rho_l0, 0.7 * rho_v0, y10),
+        (0.9 * rho_l0, 0.5 * rho_v0, _clip_x(y10 + 0.01)),
+        (1.2 * rho_l0, 0.5 * rho_v0, _clip_x(y10 - 0.01)),
+    ]
+    best = None
+    best_score = np.inf
+    for idx, (rl, rv, yy) in enumerate(attempts):
+        row = _attempt(rl, rv, yy)
+        if row["status"] == "CONVERGED":
+            row["notes"] = f"{row['notes']} | retry={idx}"
+            return row
+        score = float(row["r_P"] + row["r_mu"])
+        if score < best_score:
+            best = row
+            best_score = score
+    assert best is not None
+    best["notes"] = f"{best['notes']} | retry=best_failed"
+    return best
 
 
 def solve_dew_at_t(
@@ -788,50 +810,72 @@ def solve_dew_at_t(
         except Exception:
             return np.array([1.0e6, 1.0e6, 1.0e6], dtype=float)
 
-    rho_v_seed = min(max(float(rho_v0), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
-    rho_l_seed = min(max(float(rho_l0), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
-    dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
-    x10 = _clip_x(x10)
-    u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(x10 / (1.0 - x10))], dtype=float)
-    lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
-    ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
-    sol = least_squares(
-        res,
-        u0,
-        bounds=(lb, ub),
-        method=LSQ_METHOD,
-        ftol=1.0e-12,
-        xtol=1.0e-12,
-        gtol=1.0e-12,
-        max_nfev=LSQ_MAX_NFEV,
-        x_scale=LSQ_X_SCALE,
-        diff_step=LSQ_DIFF_STEP,
-    )
+    def _attempt(rho_l_seed_in: float, rho_v_seed_in: float, x1_seed_in: float) -> Dict:
+        rho_v_seed = min(max(float(rho_v_seed_in), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
+        rho_l_seed = min(max(float(rho_l_seed_in), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
+        dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
+        x1_seed = _clip_x(x1_seed_in)
+        u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(x1_seed / (1.0 - x1_seed))], dtype=float)
+        lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
+        ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+        sol = least_squares(
+            res,
+            u0,
+            bounds=(lb, ub),
+            method=LSQ_METHOD,
+            ftol=1.0e-12,
+            xtol=1.0e-12,
+            gtol=1.0e-12,
+            max_nfev=LSQ_MAX_NFEV,
+            x_scale=LSQ_X_SCALE,
+            diff_step=LSQ_DIFF_STEP,
+        )
+        rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
+        x1 = _clip_x(_sigmoid(float(sol.x[2])))
+        st_l = mix_state(d1, d2, t_k, rho_l, x1)
+        st_v = mix_state(d1, d2, t_k, rho_v, z1)
+        mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, x1)
+        mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, z1)
+        r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
+        r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
+        ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
+        return {
+            "status": "CONVERGED" if ok else "DIVERGED",
+            "T_K": float(t_k),
+            "P_Pa": float(0.5 * (st_l.p_pa + st_v.p_pa)),
+            "rho_l_molm3": float(rho_l),
+            "rho_v_molm3": float(rho_v),
+            "x1_liq": float(x1),
+            "y1_vap": float(z1),
+            "h_l_Jmol": float(st_l.h_jmol),
+            "h_v_Jmol": float(st_v.h_jmol),
+            "r_P": float(r_p),
+            "r_mu": float(r_mu),
+            "iterations": int(sol.nfev),
+            "notes": str(sol.message),
+        }
 
-    rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
-    x1 = _clip_x(_sigmoid(float(sol.x[2])))
-    st_l = mix_state(d1, d2, t_k, rho_l, x1)
-    st_v = mix_state(d1, d2, t_k, rho_v, z1)
-    mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, x1)
-    mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, z1)
-    r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
-    r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
-    ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
-    return {
-        "status": "CONVERGED" if ok else "DIVERGED",
-        "T_K": float(t_k),
-        "P_Pa": float(0.5 * (st_l.p_pa + st_v.p_pa)),
-        "rho_l_molm3": float(rho_l),
-        "rho_v_molm3": float(rho_v),
-        "x1_liq": float(x1),
-        "y1_vap": float(z1),
-        "h_l_Jmol": float(st_l.h_jmol),
-        "h_v_Jmol": float(st_v.h_jmol),
-        "r_P": float(r_p),
-        "r_mu": float(r_mu),
-        "iterations": int(sol.nfev),
-        "notes": str(sol.message),
-    }
+    x10 = _clip_x(x10)
+    attempts = [
+        (rho_l0, rho_v0, x10),
+        (1.1 * rho_l0, 0.7 * rho_v0, x10),
+        (0.9 * rho_l0, 0.5 * rho_v0, _clip_x(x10 + 0.01)),
+        (1.2 * rho_l0, 0.5 * rho_v0, _clip_x(x10 - 0.01)),
+    ]
+    best = None
+    best_score = np.inf
+    for idx, (rl, rv, xx) in enumerate(attempts):
+        row = _attempt(rl, rv, xx)
+        if row["status"] == "CONVERGED":
+            row["notes"] = f"{row['notes']} | retry={idx}"
+            return row
+        score = float(row["r_P"] + row["r_mu"])
+        if score < best_score:
+            best = row
+            best_score = score
+    assert best is not None
+    best["notes"] = f"{best['notes']} | retry=best_failed"
+    return best
 
 
 def run_true_vle_envelope(
@@ -884,26 +928,30 @@ def run_true_vle_envelope(
 
     rhoc1 = float(d1["basic"]["rhoc"]) / mw1
     rhoc2 = float(d2["basic"]["rhoc"]) / mw2
-    rho_l_guess = 0.8 * (z1 * rhoc1 + (1.0 - z1) * rhoc2)
-    rho_v_guess = 0.01 * rho_l_guess
+    rho_l_seed = 0.8 * (z1 * rhoc1 + (1.0 - z1) * rhoc2)
+    rho_v_seed = 0.01 * rho_l_seed
+    bubble_rho_l_guess = rho_l_seed
+    bubble_rho_v_guess = rho_v_seed
+    dew_rho_l_guess = rho_l_seed
+    dew_rho_v_guess = rho_v_seed
     y1_guess = z1
     x1_guess = z1
 
     bubble_rows: List[Dict] = []
     dew_rows: List[Dict] = []
     for t_k in np.asarray(t_vals, dtype=float):
-        b = solve_bubble_at_t(d1, d2, float(t_k), z1, rho_l_guess, rho_v_guess, y1_guess)
+        b = solve_bubble_at_t(d1, d2, float(t_k), z1, bubble_rho_l_guess, bubble_rho_v_guess, y1_guess)
         bubble_rows.append(b)
         if b["status"] == "CONVERGED":
-            rho_l_guess = b["rho_l_molm3"]
-            rho_v_guess = b["rho_v_molm3"]
+            bubble_rho_l_guess = b["rho_l_molm3"]
+            bubble_rho_v_guess = b["rho_v_molm3"]
             y1_guess = b["y1_vap"]
 
-        d = solve_dew_at_t(d1, d2, float(t_k), z1, rho_l_guess, rho_v_guess, x1_guess)
+        d = solve_dew_at_t(d1, d2, float(t_k), z1, dew_rho_l_guess, dew_rho_v_guess, x1_guess)
         dew_rows.append(d)
         if d["status"] == "CONVERGED":
-            rho_l_guess = d["rho_l_molm3"]
-            rho_v_guess = d["rho_v_molm3"]
+            dew_rho_l_guess = d["rho_l_molm3"]
+            dew_rho_v_guess = d["rho_v_molm3"]
             x1_guess = d["x1_liq"]
     return bubble_rows, dew_rows, z1
 

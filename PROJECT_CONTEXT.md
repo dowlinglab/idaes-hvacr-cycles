@@ -412,3 +412,79 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - 2026-03-03: Updated `.gitignore` to also ignore CSV outputs (`verification/*.csv` and `*.csv`) per user request for excluding generated tabular artifacts from pushes.
 - 2026-03-03: Updated `.gitignore` to ignore JSON outputs as requested (`verification/*.json` and `*.json`) alongside CSV/plot artifacts.
 - 2026-03-03: Reverted JSON ignore addition per user correction; `.gitignore` now excludes plots and CSV artifacts, but does not ignore JSON files.
+- 2026-03-03: Ran a focused Honeywell PT solver-parameter sweep to check if MAPE can be reduced further without changing thermodynamic equations.
+  Output: `verification/r515b_solver_mape_sweep_focused_20260303.csv`.
+  Findings:
+  - Best raw MAPE observed: `15.0987%` using `LSQ_METHOD='dogbox'`, `LSQ_DIFF_STEP=5e-8` (or `1e-7`), `LSQ_MAX_NFEV=1200`, `LSQ_X_SCALE=1.0`.
+  - Tradeoff: this setting only converged `33/49` both-branch points, so it fails the strict full-coverage objective.
+  - Best full-coverage setting remains unchanged: `LSQ_METHOD='trf'`, `LSQ_X_SCALE=1.0`, `LSQ_DIFF_STEP=1e-7`, `LSQ_MAX_NFEV=800`, with `49/49` converged and MAPE `16.1491%`.
+  Decision: keep `trf` settings for production runs unless user approves reduced-coverage calibration mode.
+- 2026-03-03: Implemented convergence-only guess-strategy upgrades in `mixture_true_vle_copy.py`:
+  (1) separated continuation seeds by branch (bubble and dew no longer cross-share `rho_l/rho_v`),
+  (2) added bounded adaptive retry seeds per point (`rho_l`/`rho_v` perturbations and `x/y` perturbation ±0.01).
+  Verification run output: `verification/r515b_honeywell_pt_comparison_guess_tuned_20260303.csv`.
+  Result: strict convergence stayed `49/49` (`bubble 49/49`, `dew 49/49`), MAPE remained `16.1491%` (no net change vs tuned baseline).
+  Retry usage diagnostics on the 49-point set: bubble used primary seed on all points (`retry=0` for `49/49`), dew used one fallback-retry point (`retry=1` for `1/49`).
+  Interpretation: current MAPE floor appears model-dominant under the existing equation set; guess strategy improved robustness margin but not pressure-bias magnitude.
+- 2026-03-03: Generated SI cross-check handoff figure for interaction-parameter source review:
+  `verification/r515b_bell_si_crosscheck_figure_20260303.png`.
+  Panel A shows Bell 2023 Table-13 anchor relative errors from `verification/r515a_reference_suite_validation.csv`;
+  Panel B shows current Honeywell R515B PT relative-error trend vs temperature from
+  `verification/r515b_honeywell_pt_comparison_guess_tuned_20260303.csv` (`w1=0.911`, `49/49` converged, MAPE `16.15%`).
+- 2026-03-03: Generated fresh R515B true-VLE dome artifacts with current tuned solver (no science changes):
+  command settings: `w1=0.911`, `T=250..360 K`, `n=200`.
+  Outputs:
+  - `verification/r515b_true_vle_bubble_dome_20260303.csv`
+  - `verification/r515b_true_vle_dew_dome_20260303.csv`
+  - `verification/r515b_true_vle_metadata_dome_20260303.json`
+  - `verification/r515b_true_vle_envelope_dome_raw_20260303.png`
+  Postprocessed diagnostics:
+  - `verification/r515b_true_vle_diagnostics_dome_20260303.csv`
+  - `verification/r515b_true_vle_converged_only_dome_20260303.csv`
+  - `verification/r515b_true_vle_envelope_clean_dome_20260303.png`
+  - `verification/r515b_true_vle_envelope_with_failures_dome_20260303.png`
+  Convergence summary: bubble `200/200`, dew `200/200`.
+- 2026-03-03: Implemented crossover-aware dome postprocessing/visualization updates in
+  `scripts/postprocess_true_vle_outputs.py` (no thermodynamic solver logic changes):
+  - added `detect_crossover_indices(h_liq, h_vap)` and `get_crossovers(dome_csv_path)`,
+  - added crossover diagnostics CSV output and warning path with optional `--strict` non-zero exit,
+  - split bubble/dew plotted lines at crossover indices and highlighted inverted tie-lines in red,
+  - added companion reviewer plots: P-T overlay, h-T overlay, and P-h composition-colorized view,
+  - added optional `--continuous-envelope` diagnostic interpolation proxy (visualization-only; not TP-flash).
+  New artifacts from the 2026-03-03 dome run:
+  - `verification/r515b_dome_crossovers_20260303.csv`
+  - `verification/r515b_true_vle_pt_overlay_dome_20260303.png`
+  - `verification/r515b_true_vle_ht_overlay_dome_20260303.png`
+  - `verification/r515b_true_vle_ph_colored_dome_20260303.png`
+  Crossover count detected: `17`.
+  Representative crossover: `T = 306.381910 K`,
+  `h_liq = 426.975227 kJ/kg`, `h_vap = 396.888137 kJ/kg`,
+  `P_bubble = 491.356425 kPa`, `P_dew = 777.490842 kPa`,
+  `x_liq = 0.938504`, `y_vap = 0.938504`,
+  action: tie-line plotted in red and row recorded in `verification/r515b_dome_crossovers_20260303.csv`.
+
+## 2026-03-02 — Honeywell comparison run (automated diagnostics)
+
+- Honeywell source: Solstice-N15-TDS_EN.pdf, page 1 (composition) & page 3 (PT table).
+- Honeywell composition used for comparison: w1=0.911 (mass fraction), w2=0.089. Source: Solstice-N15-TDS_EN.pdf, p.1.
+- Honeywell mass fractions: w1=0.911 (R1234ze), w2=0.089 (R227ea). Converted mole fraction used: x1=0.93850379423, x2=0.0614962057704. MWs used from model JSONs: MW1=0.1140416 kg/mol, MW2=0.17002886 kg/mol.
+- Honeywell mixture MW note: datasheet mixture MW (117.48 kg/kmol) logged as reference only; composition conversion used component MWs from IDAES parameter files.
+- Bubble comparison CSV: `diagnostics/honeywell_vs_model_bubble_20260302.csv`
+- Dew comparison CSV: `diagnostics/honeywell_vs_model_dew_20260302.csv`
+- REFPROP/CoolProp comparison CSV: `diagnostics/ref_compare_20260302.csv` (status: not_available for usable saturation points in this environment; CoolProp import succeeded but returned NaN for queried blend saturation pressures at selected temperatures)
+- Parameter dump path: `diagnostics/params_used_20260302.txt`
+- Single point deep dive JSON: `diagnostics/single_point_deepdive_T_253.93_20260302.json`
+- Honeywell-marker overlay figure: `diagnostics/r515b_ph_overlay_honeywell_markers_20260302.png`
+- MAPE (bubble vs Honeywell) = 16.418081620111% ; convergence count = 49/49
+- MAPE (dew vs Honeywell) = 15.880078702164% ; convergence count = 49/49
+- Solver note: all Honeywell-grid points returned `solver_status=CONVERGED`; fugacity residual max values are near machine precision (order 1e-15 in logged CSVs).
+- Worst bubble absolute-percent-error deep dive (auto-selected):
+  T = 253.93 K (-19.22 C), P_ref = 100.0 kPa,
+  P_bubble_model = 180.269170622232 kPa, P_dew_model = 176.393221333737 kPa,
+  P_at_liq_density(x_overall) = 180.269170622259 kPa,
+  P_at_vap_density(x_overall) = 180.166638373148 kPa,
+  ln(f_l/f_v) = [1.7231058903339965e-15, 3.446211780667993e-15].
+- Bell parameter sanity result: `diagnostics/params_used_20260302.txt` reports
+  `max_abs_diff_reducing=0`, `max_abs_diff_departure=0`, `flag_error_gt_1e-10=False` against Bell (2023) Table 7 literals currently encoded in code.
+- Quick conclusion: under current no-science-change model, Honeywell PT bubble/dew MAPE remains ~16%; no parameter-load mismatch was detected in the Bell pair constants/coefficient dump.
+- Next action: keep EOS parameters unchanged; if lower MAPE is required, proceed via approved scientific path (reference-tool baseline on an environment with working mixture saturation calls and/or model-parameter recalibration).

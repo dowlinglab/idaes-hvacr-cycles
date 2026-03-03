@@ -1,0 +1,22 @@
+{
+  "stamp": "20260302",
+  "MW1": 0.1140416,
+  "MW2": 0.17002886,
+  "w1": 0.911,
+  "w2": 0.08899999999999997,
+  "x1": 0.9385037942295681,
+  "x2": 0.06149620577043191,
+  "bubble_csv": "diagnostics/honeywell_vs_model_bubble_20260302.csv",
+  "dew_csv": "diagnostics/honeywell_vs_model_dew_20260302.csv",
+  "ref_compare_csv": "diagnostics/ref_compare_20260302.csv",
+  "params_file": "diagnostics/params_used_20260302.txt",
+  "deepdive_json": "diagnostics/single_point_deepdive_T_253.93_20260302.json",
+  "overlay_fig": "diagnostics/r515b_ph_overlay_honeywell_markers_20260302.png",
+  "mape_bubble_pct": 16.418081620111042,
+  "mape_dew_pct": 15.880078702164035,
+  "conv_b": 49,
+  "conv_d": 49,
+  "n_total": 49,
+  "ref_compare_status": "available_coolprop",
+  "worst_T_K": 253.92999999999998
+}
