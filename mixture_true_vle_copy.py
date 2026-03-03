@@ -16,11 +16,11 @@ Version: v0.1.0
 # Date: 2026-03-02
 # Assumptions:
 # - Binary VLE solved from P equality and component chemical-potential equality.
-# - Chemical potentials are evaluated numerically from total Helmholtz energy
-#   A(T,V,n1,n2) using finite differences at fixed T,V,n_j.
+# - Chemical potentials are evaluated from fugacity using analytic composition
+#   derivatives of n*alpha^r.
 # - Bubble curve fixes liquid composition x=z; dew curve fixes vapor composition y=z.
 # - This module is isolated from compute_pressure_enthalpy workflow.
-# TODO: Replace finite-difference chemical potentials with analytic expressions.
+# TODO: Add optional finite-difference mu_i cross-check for debugging.
 """
 
 from __future__ import annotations
@@ -35,11 +35,14 @@ from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import root
+from scipy.optimize import least_squares
 
 from linear_model_codex import (
     BELL_2023_R1234ZE_R227EA,
     R_u,
+    alphar_idaes_with_derivs,
+    bell2023_departure_alphar,
+    bell2023_departure_base,
     bell2023_Tred_vred,
     load_idaes_helmholtz_json,
     mixture_alpha0_alphar_derivs,
@@ -48,11 +51,51 @@ from linear_model_codex import (
 
 
 EPS_X = 1e-12
+RHO_MIN_MOLM3 = 1e-9
+RHO_MAX_MOLM3 = 2.0e4
+LSQ_DIFF_STEP = 1e-7
+LSQ_MAX_NFEV = 800
+LSQ_METHOD = "trf"
+LSQ_X_SCALE = 1.0
 
 
 @dataclass
 class MixState:
-    """State container for one phase."""
+    """
+    Purpose
+    -------
+    Container for one phase state returned by mixture EOS evaluations.
+
+    Inputs
+    ------
+    p_pa : float [Pa]
+    h_jmol : float [J/mol]
+    g_jmol : float [J/mol]
+    rho_mol : float [mol/m^3]
+    rho_mass : float [kg/m^3]
+    x1 : float [mol/mol]
+
+    Outputs
+    -------
+    MixState [dataclass]
+      Immutable-style record of phase thermodynamic state.
+
+    Assumptions
+    -----------
+    - Values are computed at thermodynamically meaningful states.
+
+    Failure modes
+    -------------
+    - No internal validation; invalid values can be stored if provided.
+
+    References
+    ----------
+    - Lemmon and Tillner-Roth Helmholtz mixture framework.
+
+    Notes on numerical stability
+    ----------------------------
+    - Not applicable; this class only stores scalar outputs.
+    """
 
     p_pa: float
     h_jmol: float
@@ -77,6 +120,23 @@ def w1_to_x1(w1: float, mw1: float, mw2: float) -> float:
     Outputs
     -------
     x1 : float [mol/mol]
+
+    Assumptions
+    -----------
+    - 0 <= w1 <= 1 and mw1,mw2 > 0.
+
+    Failure modes
+    -------------
+    - Division by zero if mw1/mw2 invalid.
+    - Returns non-physical values if w1 is outside [0,1].
+
+    References
+    ----------
+    - Standard mass-to-mole fraction conversion relation.
+
+    Notes on numerical stability
+    ----------------------------
+    - Stable for positive molecular weights and bounded mass fractions.
     """
     w2 = 1.0 - w1
     n1 = w1 / mw1
@@ -85,7 +145,35 @@ def w1_to_x1(w1: float, mw1: float, mw2: float) -> float:
 
 
 def _clip_x(x1: float) -> float:
-    """Clip composition to open interval for log-stable transforms."""
+    """
+    Purpose
+    -------
+    Clamp composition into an open interval to avoid log singularities.
+
+    Inputs
+    ------
+    x1 : float [mol/mol]
+
+    Outputs
+    -------
+    x1_clipped : float [mol/mol]
+
+    Assumptions
+    -----------
+    - Composition is intended to be near [0,1].
+
+    Failure modes
+    -------------
+    - No explicit error; silently clips out-of-range inputs.
+
+    References
+    ----------
+    - Numerical guard for log(x) terms in mixture Helmholtz ideal mixing.
+
+    Notes on numerical stability
+    ----------------------------
+    - Prevents overflow/NaN from log(0) in entropy-of-mixing terms.
+    """
     return float(min(max(x1, EPS_X), 1.0 - EPS_X))
 
 
@@ -105,6 +193,25 @@ def _mix_alpha_and_derivs(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: fl
     alpha_mix : float [unitless]
     alpha_tau_mix : float [unitless]
     ar_del_mix : float [unitless]
+
+    Assumptions
+    -----------
+    - d1 and d2 match expected IDAES Helmholtz JSON schema.
+    - Reducing/departure parameters are for R1234ze(E)/R227ea.
+
+    Failure modes
+    -------------
+    - Raises KeyError/ValueError for malformed JSON data.
+    - Numeric overflow/underflow possible at extreme reduced states.
+
+    References
+    ----------
+    - Bell (2023) reducing and departure formulation.
+    - Lemmon and Tillner-Roth Helmholtz mixture identities.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses composition clipping and delegated EOS derivative guards.
     """
     x1 = _clip_x(x1)
     x2 = 1.0 - x1
@@ -155,6 +262,24 @@ def mix_state(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: float) -> MixS
     -------
     MixState
       p [Pa], h [J/mol], g [J/mol], rho_mol [mol/m^3], rho_mass [kg/m^3], x1 [mol/mol]
+
+    Assumptions
+    -----------
+    - Composition is fixed for this phase-state evaluation.
+    - EOS identity forms for p,h,g from Helmholtz are valid in the evaluated region.
+
+    Failure modes
+    -------------
+    - Propagates exceptions from reducing functions or alpha evaluations.
+    - May return non-physical results if called in unstable/two-phase states.
+
+    References
+    ----------
+    - Helmholtz identities: Z = 1 + delta*alphar_delta and h/(RT), g/(RT) forms.
+
+    Notes on numerical stability
+    ----------------------------
+    - Accuracy depends on reduced derivative quality from delegated functions.
     """
     x1 = _clip_x(x1)
     x2 = 1.0 - x1
@@ -203,6 +328,23 @@ def total_helmholtz_a(d1: Dict, d2: Dict, t_k: float, v_m3: float, n1_mol: float
     Outputs
     -------
     A : float [J]
+
+    Assumptions
+    -----------
+    - Homogeneous phase representation at the supplied state.
+
+    Failure modes
+    -------------
+    - Division by zero if v_m3 <= 0.
+    - Propagates EOS evaluation exceptions.
+
+    References
+    ----------
+    - A = n*R_u*T*alpha_mix.
+
+    Notes on numerical stability
+    ----------------------------
+    - Small composition floors avoid divide-by-zero in x1 = n1/(n1+n2).
     """
     n1 = max(n1_mol, EPS_X)
     n2 = max(n2_mol, EPS_X)
@@ -213,9 +355,64 @@ def total_helmholtz_a(d1: Dict, d2: Dict, t_k: float, v_m3: float, n1_mol: float
     return float(n * R_u * t_k * alpha)
 
 
-def chemical_potentials_fd(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: float) -> Tuple[float, float]:
+def _bell2023_reducing_derivs_binary_local(
+    x1: float, tc1: float, tc2: float, vc1: float, vc2: float
+) -> Tuple[float, float]:
     """
-    Compute component chemical potentials by finite-difference of A(T,V,n).
+    Purpose
+    -------
+    Compute analytic composition derivatives of binary reducing functions.
+
+    Inputs
+    ------
+    x1 : float [mol/mol]
+    tc1, tc2 : float [K]
+    vc1, vc2 : float [m^3/mol]
+
+    Outputs
+    -------
+    dTred_dx1 : float [K]
+    dvred_dx1 : float [m^3/mol]
+
+    Assumptions
+    -----------
+    - Binary system with x2 = 1 - x1.
+    - Bell parameter set corresponds to R1234ze(E)/R227ea.
+
+    Failure modes
+    -------------
+    - Numeric issues if inputs are non-physical.
+
+    References
+    ----------
+    - Bell (2023) corresponding-states reducing function derivatives.
+
+    Notes on numerical stability
+    ----------------------------
+    - Closed-form derivatives avoid finite-difference noise in composition terms.
+    """
+    x2 = 1.0 - x1
+    p = BELL_2023_R1234ZE_R227EA
+
+    dt = (p.beta_T ** 2) * x1 + x2
+    dv = (p.beta_v ** 2) * x1 + x2
+    theta_t = 1.0 / dt
+    theta_v = 1.0 / dv
+    dtheta_t = -((p.beta_T ** 2) - 1.0) / (dt * dt)
+    dtheta_v = -((p.beta_v ** 2) - 1.0) / (dv * dv)
+
+    tc12 = p.beta_T * p.gamma_T * np.sqrt(tc1 * tc2)
+    vc12 = p.beta_v * p.gamma_v * ((vc1 ** (1.0 / 3.0) + vc2 ** (1.0 / 3.0)) ** 3) / 8.0
+    dxx_theta_t = (x2 - x1) * theta_t + x1 * x2 * dtheta_t
+    dxx_theta_v = (x2 - x1) * theta_v + x1 * x2 * dtheta_v
+    dtred_dx1 = 2.0 * x1 * tc1 - 2.0 * x2 * tc2 + 2.0 * tc12 * dxx_theta_t
+    dvred_dx1 = 2.0 * x1 * vc1 - 2.0 * x2 * vc2 + 2.0 * vc12 * dxx_theta_v
+    return float(dtred_dx1), float(dvred_dx1)
+
+
+def chemical_potentials_analytic(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: float) -> Tuple[float, float]:
+    """
+    Compute component chemical potentials using analytic fugacity expressions.
 
     Inputs
     ------
@@ -227,34 +424,196 @@ def chemical_potentials_fd(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: f
     Outputs
     -------
     mu1, mu2 : float [J/mol]
+
+    Assumptions
+    -----------
+    - Fugacity relation f_i = x_i*rho*R*T*exp(d(n*alpha^r)/dn_i) is valid.
+    - Composition derivatives follow fixed T,rho formulation.
+
+    Failure modes
+    -------------
+    - Propagates EOS/reducing exceptions.
+    - May overflow if exponent arguments are extreme.
+
+    References
+    ----------
+    - Lemmon and Tillner-Roth mixture fugacity/chemical potential framework.
+    - Bell (2023) reducing and departure derivatives.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses lower bounds on rho and fugacity log arguments.
     """
     x1 = _clip_x(x1)
     x2 = 1.0 - x1
-    n_tot = 1.0
-    n1 = x1 * n_tot
-    n2 = x2 * n_tot
-    v_m3 = n_tot / rho_mol
+    rho_mol = max(float(rho_mol), RHO_MIN_MOLM3)
 
-    dn1 = max(1e-8, 1e-6 * n1)
-    dn2 = max(1e-8, 1e-6 * n2)
+    mw1 = mw_from_json(d1)
+    mw2 = mw_from_json(d2)
+    tc1 = float(d1["basic"]["Tc"])
+    tc2 = float(d2["basic"]["Tc"])
+    rhoc1_mol = float(d1["basic"]["rhoc"]) / mw1
+    rhoc2_mol = float(d2["basic"]["rhoc"]) / mw2
+    vc1 = 1.0 / rhoc1_mol
+    vc2 = 1.0 / rhoc2_mol
 
-    a_p1 = total_helmholtz_a(d1, d2, t_k, v_m3, n1 + dn1, n2)
-    a_m1 = total_helmholtz_a(d1, d2, t_k, v_m3, max(EPS_X, n1 - dn1), n2)
-    mu1 = (a_p1 - a_m1) / (2.0 * dn1)
+    tred, vred = bell2023_Tred_vred(x1, x2, tc1, tc2, vc1, vc2, BELL_2023_R1234ZE_R227EA)
+    tau = tred / t_k
+    delta = rho_mol * vred
+    rho_red_mol = 1.0 / vred
 
-    a_p2 = total_helmholtz_a(d1, d2, t_k, v_m3, n1, n2 + dn2)
-    a_m2 = total_helmholtz_a(d1, d2, t_k, v_m3, n1, max(EPS_X, n2 - dn2))
-    mu2 = (a_p2 - a_m2) / (2.0 * dn2)
+    _, _, ar_mix, _, ar_del_mix = mixture_alpha0_alphar_derivs(
+        d1=d1,
+        d2=d2,
+        x1=x1,
+        x2=x2,
+        tau=tau,
+        delta=delta,
+        Tred=tred,
+        rho_red_mol=rho_red_mol,
+        pair_key="r1234ze|r227ea",
+    )
+
+    c1 = tc1 / tred
+    c2 = tc2 / tred
+    k1 = rho_red_mol / rhoc1_mol
+    k2 = rho_red_mol / rhoc2_mol
+    tau1 = c1 * tau
+    tau2 = c2 * tau
+    delta1 = k1 * delta
+    delta2 = k2 * delta
+    ar1, _, _ = alphar_idaes_with_derivs(d1["eos"], tau1, delta1)
+    ar2, _, _ = alphar_idaes_with_derivs(d2["eos"], tau2, delta2)
+
+    dtred_dx1, dvred_dx1 = _bell2023_reducing_derivs_binary_local(x1, tc1, tc2, vc1, vc2)
+    dtau_dx1 = dtred_dx1 / t_k
+    ddelta_dx1 = rho_mol * dvred_dx1
+    dep_base = bell2023_departure_base(tau, delta)
+    _, dep_tau, dep_del = bell2023_departure_alphar(x1, x2, tau, delta)
+    ddep_dx1 = (x2 - x1) * dep_base + dep_tau * dtau_dx1 + dep_del * ddelta_dx1
+    dar_dx1 = (ar1 - ar2) + ddep_dx1
+    dar_drho = ar_del_mix * vred
+
+    d_na_dn1 = ar_mix + rho_mol * dar_drho + x2 * dar_dx1
+    d_na_dn2 = ar_mix + rho_mol * dar_drho - x1 * dar_dx1
+    f1_pa = x1 * rho_mol * R_u * t_k * np.exp(d_na_dn1)
+    f2_pa = x2 * rho_mol * R_u * t_k * np.exp(d_na_dn2)
+    mu1 = R_u * t_k * np.log(max(1e-300, f1_pa))
+    mu2 = R_u * t_k * np.log(max(1e-300, f2_pa))
     return float(mu1), float(mu2)
 
 
 def _sigmoid(z: float) -> float:
-    """Stable logistic transform."""
+    """
+    Purpose
+    -------
+    Map unconstrained scalar to (0,1) interval for phase compositions.
+
+    Inputs
+    ------
+    z : float [unitless]
+
+    Outputs
+    -------
+    y : float [unitless]
+
+    Assumptions
+    -----------
+    - Input can span wide real values.
+
+    Failure modes
+    -------------
+    - None expected for finite z.
+
+    References
+    ----------
+    - Logistic transform.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses branch form to reduce overflow for large |z|.
+    """
     if z >= 0:
         ez = np.exp(-z)
         return float(1.0 / (1.0 + ez))
     ez = np.exp(z)
     return float(ez / (1.0 + ez))
+
+
+def _safe_residual_vector(vals: np.ndarray) -> np.ndarray:
+    """
+    Purpose
+    -------
+    Convert non-finite residuals into large finite penalties for solver safety.
+
+    Inputs
+    ------
+    vals : np.ndarray [unitless]
+
+    Outputs
+    -------
+    res : np.ndarray [unitless]
+
+    Assumptions
+    -----------
+    - Residual vector size is 3 for this VLE system.
+
+    Failure modes
+    -------------
+    - None; always returns a finite vector.
+
+    References
+    ----------
+    - Standard robust least-squares penalty strategy.
+
+    Notes on numerical stability
+    ----------------------------
+    - Prevents NaN/Inf from breaking nonlinear iterations.
+    """
+    if np.all(np.isfinite(vals)):
+        return vals
+    return np.array([1.0e6, 1.0e6, 1.0e6], dtype=float)
+
+
+def _rho_param_to_states(u0: float, u1: float) -> Tuple[float, float]:
+    """
+    Purpose
+    -------
+    Map unconstrained variables to physically ordered vapor/liquid densities.
+
+    Inputs
+    ------
+    u0, u1 : float [unitless]
+
+    Outputs
+    -------
+    rho_l : float [mol/m^3]
+    rho_v : float [mol/m^3]
+
+    Assumptions
+    -----------
+    - u0 controls rho_v via exp transform.
+    - u1 controls rho_l-rho_v via exp transform.
+
+    Failure modes
+    -------------
+    - None; values are clipped into bounded intervals.
+
+    References
+    ----------
+    - Bounded reparameterization for nonlinear VLE solves.
+
+    Notes on numerical stability
+    ----------------------------
+    - Enforces positivity and strict ordering rho_l > rho_v.
+    """
+    rho_v = float(np.exp(u0))
+    drho = float(np.exp(u1))
+    rho_v = min(max(rho_v, RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.95)
+    drho = min(max(drho, RHO_MIN_MOLM3), RHO_MAX_MOLM3)
+    rho_l = min(max(rho_v + drho, rho_v * (1.0 + 1.0e-8)), RHO_MAX_MOLM3)
+    rho_v = min(rho_v, rho_l * (1.0 - 1.0e-8))
+    return rho_l, rho_v
 
 
 def solve_bubble_at_t(
@@ -269,34 +628,83 @@ def solve_bubble_at_t(
     """
     Solve bubble state at fixed liquid composition x=z.
 
-    Unknowns: rho_l, rho_v, y1.
-    Equations: P_l=P_v, mu1_l=mu1_v, mu2_l=mu2_v.
+    Inputs
+    ------
+    d1,d2 : dict [unitless]
+    t_k : float [K]
+    z1 : float [mol/mol]
+        Fixed liquid composition for bubble solve.
+    rho_l0, rho_v0 : float [mol/m^3]
+        Initial liquid/vapor density guesses.
+    y10 : float [mol/mol]
+        Initial vapor composition guess.
+
+    Outputs
+    -------
+    row : dict [mixed units]
+      Contains status, pressure, densities, compositions, enthalpies, residuals.
+
+    Assumptions
+    -----------
+    - Unknown vector is (rho_l, rho_v, y1).
+    - Equilibrium equations are P_l=P_v and mu_i^l=mu_i^v for i=1,2.
+
+    Failure modes
+    -------------
+    - May return DIVERGED if strict residual gates are not met.
+    - Can hit penalized residual mode for non-finite trial states.
+
+    References
+    ----------
+    - VLE equilibrium conditions from Helmholtz-fugacity formulation.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses bounded least-squares and ordered density mapping.
     """
     z1 = _clip_x(z1)
 
     def res(u):
-        rho_l = float(np.exp(u[0]))
-        rho_v = float(np.exp(u[1]))
+        rho_l, rho_v = _rho_param_to_states(float(u[0]), float(u[1]))
         y1 = _clip_x(_sigmoid(float(u[2])))
-        st_l = mix_state(d1, d2, t_k, rho_l, z1)
-        st_v = mix_state(d1, d2, t_k, rho_v, y1)
-        mu1_l, mu2_l = chemical_potentials_fd(d1, d2, t_k, rho_l, z1)
-        mu1_v, mu2_v = chemical_potentials_fd(d1, d2, t_k, rho_v, y1)
-        r1 = (st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
-        r2 = (mu1_l - mu1_v) / (R_u * t_k)
-        r3 = (mu2_l - mu2_v) / (R_u * t_k)
-        return np.array([r1, r2, r3], dtype=float)
+        try:
+            st_l = mix_state(d1, d2, t_k, rho_l, z1)
+            st_v = mix_state(d1, d2, t_k, rho_v, y1)
+            mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, z1)
+            mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, y1)
+            r1 = (st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
+            r2 = (mu1_l - mu1_v) / (R_u * t_k)
+            r3 = (mu2_l - mu2_v) / (R_u * t_k)
+            return _safe_residual_vector(np.array([r1, r2, r3], dtype=float))
+        except Exception:
+            return np.array([1.0e6, 1.0e6, 1.0e6], dtype=float)
 
-    u0 = np.array([np.log(max(rho_l0, 1e-9)), np.log(max(rho_v0, 1e-12)), np.log(y10 / (1.0 - y10))], dtype=float)
-    sol = root(res, u0, method="hybr", tol=1e-10)
+    rho_v_seed = min(max(float(rho_v0), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
+    rho_l_seed = min(max(float(rho_l0), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
+    dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
+    y10 = _clip_x(y10)
+    u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(y10 / (1.0 - y10))], dtype=float)
+    lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
+    ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+    sol = least_squares(
+        res,
+        u0,
+        bounds=(lb, ub),
+        method=LSQ_METHOD,
+        ftol=1.0e-12,
+        xtol=1.0e-12,
+        gtol=1.0e-12,
+        max_nfev=LSQ_MAX_NFEV,
+        x_scale=LSQ_X_SCALE,
+        diff_step=LSQ_DIFF_STEP,
+    )
 
-    rho_l = float(np.exp(sol.x[0]))
-    rho_v = float(np.exp(sol.x[1]))
+    rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
     y1 = _clip_x(_sigmoid(float(sol.x[2])))
     st_l = mix_state(d1, d2, t_k, rho_l, z1)
     st_v = mix_state(d1, d2, t_k, rho_v, y1)
-    mu1_l, mu2_l = chemical_potentials_fd(d1, d2, t_k, rho_l, z1)
-    mu1_v, mu2_v = chemical_potentials_fd(d1, d2, t_k, rho_v, y1)
+    mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, z1)
+    mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, y1)
     r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
     r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
     ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
@@ -329,34 +737,83 @@ def solve_dew_at_t(
     """
     Solve dew state at fixed vapor composition y=z.
 
-    Unknowns: rho_l, rho_v, x1.
-    Equations: P_l=P_v, mu1_l=mu1_v, mu2_l=mu2_v.
+    Inputs
+    ------
+    d1,d2 : dict [unitless]
+    t_k : float [K]
+    z1 : float [mol/mol]
+        Fixed vapor composition for dew solve.
+    rho_l0, rho_v0 : float [mol/m^3]
+        Initial liquid/vapor density guesses.
+    x10 : float [mol/mol]
+        Initial liquid composition guess.
+
+    Outputs
+    -------
+    row : dict [mixed units]
+      Contains status, pressure, densities, compositions, enthalpies, residuals.
+
+    Assumptions
+    -----------
+    - Unknown vector is (rho_l, rho_v, x1).
+    - Equilibrium equations are P_l=P_v and mu_i^l=mu_i^v for i=1,2.
+
+    Failure modes
+    -------------
+    - May return DIVERGED if strict residual gates are not met.
+    - Can hit penalized residual mode for non-finite trial states.
+
+    References
+    ----------
+    - VLE equilibrium conditions from Helmholtz-fugacity formulation.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses bounded least-squares and ordered density mapping.
     """
     z1 = _clip_x(z1)
 
     def res(u):
-        rho_l = float(np.exp(u[0]))
-        rho_v = float(np.exp(u[1]))
+        rho_l, rho_v = _rho_param_to_states(float(u[0]), float(u[1]))
         x1 = _clip_x(_sigmoid(float(u[2])))
-        st_l = mix_state(d1, d2, t_k, rho_l, x1)
-        st_v = mix_state(d1, d2, t_k, rho_v, z1)
-        mu1_l, mu2_l = chemical_potentials_fd(d1, d2, t_k, rho_l, x1)
-        mu1_v, mu2_v = chemical_potentials_fd(d1, d2, t_k, rho_v, z1)
-        r1 = (st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
-        r2 = (mu1_l - mu1_v) / (R_u * t_k)
-        r3 = (mu2_l - mu2_v) / (R_u * t_k)
-        return np.array([r1, r2, r3], dtype=float)
+        try:
+            st_l = mix_state(d1, d2, t_k, rho_l, x1)
+            st_v = mix_state(d1, d2, t_k, rho_v, z1)
+            mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, x1)
+            mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, z1)
+            r1 = (st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
+            r2 = (mu1_l - mu1_v) / (R_u * t_k)
+            r3 = (mu2_l - mu2_v) / (R_u * t_k)
+            return _safe_residual_vector(np.array([r1, r2, r3], dtype=float))
+        except Exception:
+            return np.array([1.0e6, 1.0e6, 1.0e6], dtype=float)
 
-    u0 = np.array([np.log(max(rho_l0, 1e-9)), np.log(max(rho_v0, 1e-12)), np.log(x10 / (1.0 - x10))], dtype=float)
-    sol = root(res, u0, method="hybr", tol=1e-10)
+    rho_v_seed = min(max(float(rho_v0), RHO_MIN_MOLM3), RHO_MAX_MOLM3 * 0.9)
+    rho_l_seed = min(max(float(rho_l0), rho_v_seed * (1.0 + 1.0e-6)), RHO_MAX_MOLM3)
+    dr_seed = max(rho_l_seed - rho_v_seed, 1.0e-6)
+    x10 = _clip_x(x10)
+    u0 = np.array([np.log(rho_v_seed), np.log(dr_seed), np.log(x10 / (1.0 - x10))], dtype=float)
+    lb = np.array([np.log(RHO_MIN_MOLM3), np.log(1.0e-9), -30.0], dtype=float)
+    ub = np.array([np.log(RHO_MAX_MOLM3), np.log(RHO_MAX_MOLM3), 30.0], dtype=float)
+    sol = least_squares(
+        res,
+        u0,
+        bounds=(lb, ub),
+        method=LSQ_METHOD,
+        ftol=1.0e-12,
+        xtol=1.0e-12,
+        gtol=1.0e-12,
+        max_nfev=LSQ_MAX_NFEV,
+        x_scale=LSQ_X_SCALE,
+        diff_step=LSQ_DIFF_STEP,
+    )
 
-    rho_l = float(np.exp(sol.x[0]))
-    rho_v = float(np.exp(sol.x[1]))
+    rho_l, rho_v = _rho_param_to_states(float(sol.x[0]), float(sol.x[1]))
     x1 = _clip_x(_sigmoid(float(sol.x[2])))
     st_l = mix_state(d1, d2, t_k, rho_l, x1)
     st_v = mix_state(d1, d2, t_k, rho_v, z1)
-    mu1_l, mu2_l = chemical_potentials_fd(d1, d2, t_k, rho_l, x1)
-    mu1_v, mu2_v = chemical_potentials_fd(d1, d2, t_k, rho_v, z1)
+    mu1_l, mu2_l = chemical_potentials_analytic(d1, d2, t_k, rho_l, x1)
+    mu1_v, mu2_v = chemical_potentials_analytic(d1, d2, t_k, rho_v, z1)
     r_p = abs(st_l.p_pa - st_v.p_pa) / max(1.0, 0.5 * (st_l.p_pa + st_v.p_pa))
     r_mu = max(abs(mu1_l - mu1_v), abs(mu2_l - mu2_v)) / (R_u * t_k)
     ok = bool(sol.success and r_p <= 1e-6 and r_mu <= 1e-6 and rho_l > rho_v * (1.0 + 1e-8))
@@ -383,7 +840,42 @@ def run_true_vle_envelope(
     w1: float,
     t_vals: np.ndarray,
 ) -> Tuple[List[Dict], List[Dict], float]:
-    """Run bubble/dew solves across temperature grid with continuation."""
+    """
+    Purpose
+    -------
+    Run bubble and dew VLE solves across a temperature grid with continuation.
+
+    Inputs
+    ------
+    fluid1, fluid2 : str [unitless]
+    w1 : float [kg/kg]
+        Component-1 mass fraction.
+    t_vals : np.ndarray [K]
+
+    Outputs
+    -------
+    bubble_rows : list[dict] [mixed units]
+    dew_rows : list[dict] [mixed units]
+    z1 : float [mol/mol]
+        Overall mole fraction converted from input mass fraction.
+
+    Assumptions
+    -----------
+    - Composition is fixed overall for the envelope run.
+    - Continuation updates guesses from previously converged states.
+
+    Failure modes
+    -------------
+    - Individual temperature points may fail and be marked DIVERGED.
+
+    References
+    ----------
+    - Predictor-corrector continuation strategy for nonlinear phase-equilibrium traces.
+
+    Notes on numerical stability
+    ----------------------------
+    - Continuation greatly improves robustness versus independent per-point solves.
+    """
     d1 = load_idaes_helmholtz_json(fluid1)
     d2 = load_idaes_helmholtz_json(fluid2)
     mw1 = mw_from_json(d1)
@@ -417,7 +909,36 @@ def run_true_vle_envelope(
 
 
 def save_csv(rows: List[Dict], path: str | Path) -> None:
-    """Save VLE branch rows to CSV."""
+    """
+    Purpose
+    -------
+    Persist branch solve rows to CSV.
+
+    Inputs
+    ------
+    rows : list[dict] [mixed units]
+    path : str | Path [filesystem path]
+
+    Outputs
+    -------
+    None [unitless]
+
+    Assumptions
+    -----------
+    - All rows share the same schema/keys.
+
+    Failure modes
+    -------------
+    - File I/O exceptions propagate.
+
+    References
+    ----------
+    - Standard CSV serialization.
+
+    Notes on numerical stability
+    ----------------------------
+    - Not applicable.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -436,7 +957,38 @@ def plot_envelope(
     mw_mix: float,
     out_fig: str | Path,
 ) -> None:
-    """Plot P-h envelope from converged bubble/dew states."""
+    """
+    Purpose
+    -------
+    Plot p-h envelope using converged bubble/dew branch points.
+
+    Inputs
+    ------
+    bubble_rows, dew_rows : list[dict] [mixed units]
+    mw_mix : float [kg/mol]
+    out_fig : str | Path [filesystem path]
+
+    Outputs
+    -------
+    None [unitless]
+      Writes figure to disk.
+
+    Assumptions
+    -----------
+    - Enthalpy conversion uses h[J/mol] -> h[kJ/kg] via mw_mix.
+
+    Failure modes
+    -------------
+    - File I/O/plotting backend exceptions propagate.
+
+    References
+    ----------
+    - p-h diagram convention for refrigeration cycle review.
+
+    Notes on numerical stability
+    ----------------------------
+    - Filters to CONVERGED points to avoid plotting numerically invalid states.
+    """
     b = [r for r in bubble_rows if r["status"] == "CONVERGED"]
     d = [r for r in dew_rows if r["status"] == "CONVERGED"]
 
@@ -464,7 +1016,41 @@ def plot_envelope(
 
 
 def _cli() -> None:
-    """CLI for true VLE envelope run."""
+    """
+    Purpose
+    -------
+    Command-line entrypoint for true-VLE envelope generation.
+
+    Inputs
+    ------
+    CLI args:
+    --fluid1, --fluid2 [unitless]
+    --w1 [kg/kg]
+    --Tmin, --Tmax [K]
+    --n [count]
+    output file paths [filesystem paths]
+
+    Outputs
+    -------
+    None [unitless]
+      Writes branch CSVs, plot PNG, and metadata JSON.
+
+    Assumptions
+    -----------
+    - User-provided range and composition are physically meaningful.
+
+    Failure modes
+    -------------
+    - Raises if solver, plotting, or file operations fail.
+
+    References
+    ----------
+    - Uses run_true_vle_envelope workflow in this module.
+
+    Notes on numerical stability
+    ----------------------------
+    - Stability characteristics follow the underlying continuation and nonlinear solve.
+    """
     p = argparse.ArgumentParser(description="Compute binary true VLE envelope from chemical-potential equality.")
     p.add_argument("--fluid1", default="r1234ze")
     p.add_argument("--fluid2", default="r227ea")
@@ -505,7 +1091,7 @@ def _cli() -> None:
         "dew_converged": nd,
         "dew_failed": int(args.n - nd),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "method": "P equality + mu1/mu2 equality, FD chemical potentials from A(T,V,n1,n2)",
+        "method": "P equality + mu1/mu2 equality, analytic fugacity-based chemical potentials",
     }
     mpath = Path(args.metadata)
     mpath.parent.mkdir(parents=True, exist_ok=True)

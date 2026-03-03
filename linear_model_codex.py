@@ -309,6 +309,9 @@ def alpha0_idaes_with_derivs(eos: Dict, tau: float, delta: float) -> Tuple[float
     ----------------------------
     - Logarithms/exponentials may lose precision at extreme tau.
     """
+    tau = max(float(tau), 1e-12)
+    delta = max(float(delta), 1e-300)
+
     n0 = eos["n0"]
     g0 = eos["g0"]
     phi = int(eos["phi_ideal_type"])
@@ -412,6 +415,9 @@ def alphar_idaes_with_derivs(eos: Dict, tau: float, delta: float) -> Tuple[float
     - Exponential damping helps high-delta behavior but can underflow at large
       exponents; this is expected.
     """
+    tau = max(float(tau), 1e-12)
+    delta = max(float(delta), 1e-300)
+
     phi = int(eos["phi_residual_type"])
     hlist = eos["last_term_residual"]
 
@@ -523,6 +529,39 @@ def alphar_idaes_with_derivs(eos: Dict, tau: float, delta: float) -> Tuple[float
 # -----------------------------
 @dataclass(frozen=True)
 class Bell2023PairParams:
+    """
+    Purpose
+    -------
+    Hold Bell (2023) binary interaction parameters for reducing functions.
+
+    Inputs
+    ------
+    beta_T : float [unitless]
+    beta_v : float [unitless]
+    gamma_T : float [unitless]
+    gamma_v : float [unitless]
+
+    Outputs
+    -------
+    Bell2023PairParams [dataclass]
+      Immutable parameter bundle for reducing-rule evaluations.
+
+    Assumptions
+    -----------
+    - Parameters are fitted for a specific binary pair and not transferable.
+
+    Failure modes
+    -------------
+    - No runtime validation; incorrect values propagate to reducing calculations.
+
+    References
+    ----------
+    - Bell (2023), J. Phys. Chem. Ref. Data 52, 013101.
+
+    Notes on numerical stability
+    ----------------------------
+    - Not applicable; this class stores scalar constants.
+    """
     beta_T: float
     beta_v: float
     gamma_T: float
@@ -667,6 +706,28 @@ def bell2023_departure_alphar(x1: float, x2: float, tau: float, delta: float) ->
         val_del += nk * (tau ** tk) * ((dk * (delta ** (dk - 1.0)) * expv) + (delta ** dk) * exp_del)
 
     return float(pref * val), float(pref * val_tau), float(pref * val_del)
+
+
+def bell2023_departure_base(tau: float, delta: float) -> float:
+    """
+    Evaluate base binary departure sum without composition prefactor x1*x2.
+
+    Inputs
+    ------
+    tau : float [unitless]
+        Mixture reduced inverse temperature.
+    delta : float [unitless]
+        Mixture reduced density.
+
+    Outputs
+    -------
+    base_val : float [unitless]
+        Sum_k n_k * tau^t_k * delta^d_k * exp(-delta^l_k).
+    """
+    base = 0.0
+    for nk, tk, dk, lk in BELL_2023_DEP_COEFFS:
+        base += nk * (tau ** tk) * (delta ** dk) * np.exp(-(delta ** lk))
+    return float(base)
 
 
 def mixture_alpha0_alphar_derivs(
@@ -1065,6 +1126,54 @@ def _mixture_alpha_eval(
     }
 
 
+def _bell2023_reducing_derivs_binary(
+    x1: float,
+    Tc1: float,
+    Tc2: float,
+    vc1: float,
+    vc2: float,
+    params: Bell2023PairParams,
+) -> Tuple[float, float]:
+    """
+    Derivatives of binary Bell reducing functions wrt x1 for x2=1-x1.
+
+    Inputs
+    ------
+    x1 : float [mol/mol]
+        Mole fraction of component 1.
+    Tc1, Tc2 : float [K]
+        Component critical temperatures.
+    vc1, vc2 : float [m^3/mol]
+        Component critical molar volumes.
+    params : Bell2023PairParams [unitless]
+        Beta/gamma pair parameters.
+
+    Outputs
+    -------
+    dTred_dx1 : float [K]
+    dvred_dx1 : float [m^3/mol]
+    """
+    x2 = 1.0 - x1
+    beta_T, beta_v, gamma_T, gamma_v = params.beta_T, params.beta_v, params.gamma_T, params.gamma_v
+
+    DT = (beta_T ** 2) * x1 + x2
+    DV = (beta_v ** 2) * x1 + x2
+    theta_T = 1.0 / DT
+    theta_v = 1.0 / DV
+    dtheta_T = -((beta_T ** 2) - 1.0) / (DT * DT)
+    dtheta_v = -((beta_v ** 2) - 1.0) / (DV * DV)
+
+    Tc12 = beta_T * gamma_T * np.sqrt(Tc1 * Tc2)
+    vc12 = beta_v * gamma_v * ((vc1 ** (1.0 / 3.0) + vc2 ** (1.0 / 3.0)) ** 3) / 8.0
+
+    dxx_theta_T = (x2 - x1) * theta_T + x1 * x2 * dtheta_T
+    dxx_theta_v = (x2 - x1) * theta_v + x1 * x2 * dtheta_v
+
+    dTred_dx1 = 2.0 * x1 * Tc1 - 2.0 * x2 * Tc2 + 2.0 * Tc12 * dxx_theta_T
+    dvred_dx1 = 2.0 * x1 * vc1 - 2.0 * x2 * vc2 + 2.0 * vc12 * dxx_theta_v
+    return float(dTred_dx1), float(dvred_dx1)
+
+
 def _fd_2d(func, tau: float, delta: float, rel: float = 1e-6) -> Tuple[float, float, float]:
     """
     Numerical 2D derivatives wrt (tau, delta): f_tau, f_deldel, f_tautau, f_taudel.
@@ -1248,19 +1357,37 @@ def compute_table1_properties(
     )
     speed_sound = float(np.sqrt(max(0.0, speed2_over_rt * R_u * T / MWmix)))
 
-    # Fugacity terms from Table-1 style composition derivative of n*alpha^r.
-    n = 1.0
-    n1 = x1 * n
-    n2 = x2 * n
-    V = n / rho_mol
-    dn1 = max(1e-10, fd_rel * n1)
-    dn2 = max(1e-10, fd_rel * n2)
-    na_p1 = _nares_from_n(d1, d2, T, V, n1 + dn1, n2)
-    na_m1 = _nares_from_n(d1, d2, T, V, max(1e-16, n1 - dn1), n2)
-    d_na_dn1 = (na_p1 - na_m1) / (2.0 * dn1)
-    na_p2 = _nares_from_n(d1, d2, T, V, n1, n2 + dn2)
-    na_m2 = _nares_from_n(d1, d2, T, V, n1, max(1e-16, n2 - dn2))
-    d_na_dn2 = (na_p2 - na_m2) / (2.0 * dn2)
+    # Fugacity terms from analytic composition derivative of n*alpha^r.
+    Tc1 = float(d1["basic"]["Tc"])
+    Tc2 = float(d2["basic"]["Tc"])
+    rhoc1_mol = float(d1["basic"]["rhoc"]) / MW1
+    rhoc2_mol = float(d2["basic"]["rhoc"]) / MW2
+    vc1 = 1.0 / rhoc1_mol
+    vc2 = 1.0 / rhoc2_mol
+    Tred, vred = bell2023_Tred_vred(x1, x2, Tc1, Tc2, vc1, vc2, BELL_2023_R1234ZE_R227EA)
+    dTred_dx1, dvred_dx1 = _bell2023_reducing_derivs_binary(
+        x1, Tc1, Tc2, vc1, vc2, BELL_2023_R1234ZE_R227EA
+    )
+    dtau_dx1 = dTred_dx1 / T
+    ddelta_dx1 = rho_mol * dvred_dx1
+
+    _tau_s, _delta_s, tau1_s, tau2_s, delta1_s, delta2_s, _Tred_s, _vred_s = _mixture_reduced_state(
+        d1, d2, x1, T, rho_mol
+    )
+    _ = _tau_s, _delta_s, _Tred_s, _vred_s
+    ar1, _, _ = alphar_idaes_with_derivs(d1["eos"], tau1_s, delta1_s)
+    ar2, _, _ = alphar_idaes_with_derivs(d2["eos"], tau2_s, delta2_s)
+    _, dep_tau, dep_del = bell2023_departure_alphar(x1, x2, tau, delta)
+    dep_base = bell2023_departure_base(tau, delta)
+    ddep_dx1 = (x2 - x1) * dep_base + dep_tau * dtau_dx1 + dep_del * ddelta_dx1
+
+    # ar_x at fixed T and rho.
+    dar_dx1 = (ar1 - ar2) + ddep_dx1
+    # ar_rho at fixed T and x.
+    dar_drho = ar_del * vred
+    # n*ar derivatives at constant T,V,n_j for binary.
+    d_na_dn1 = ar + rho_mol * dar_drho + x2 * dar_dx1
+    d_na_dn2 = ar + rho_mol * dar_drho - x1 * dar_dx1
 
     f1_Pa = x1 * rho_mol * R_u * T * np.exp(d_na_dn1)
     f2_Pa = x2 * rho_mol * R_u * T * np.exp(d_na_dn2)
