@@ -2,48 +2,30 @@
 # -*- coding: utf-8 -*-
 """
 Author: Shilpa Narasimhan
-Technical support: Codex (version GPT-5)
-QA/Testing Responsibility: Shilpa
-Creation date: 2026-03-02
-Purpose of file: Compute true binary VLE envelopes (bubble/dew) for a
-fixed-overall-composition refrigerant blend using Helmholtz EOS mixture model.
+Acknowledgment: Code scaffolding assistance provided by OpenAI Codex (version: GPT-5).
+QA/testing and scientific responsibility: Shilpa Narasimhan.
+Creation date: 2026-03-03
+Purpose of file: Frozen reference copy of the true mixture VLE (mu-equality)
+solver for binary bubble/dew calculations.
 Dependencies: numpy, scipy, matplotlib, linear_model_codex
 Context reference: PROJECT_CONTEXT.md
 
-Version: v0.2.0
+FROZEN REFERENCE IMPLEMENTATION — DO NOT MODIFY WITHOUT COPYING.
 
-Two-phase mixture representation in P-h space.
-
-For mixtures, bubble and dew curves represent distinct equilibrium loci.
-The interior two-phase region is parameterized using vapor fraction beta.
-
-For a two-phase equilibrium state at fixed T and P:
-
-    h = (1 - beta) h_l + beta h_v
-
-This follows from conservation of energy and lever-rule treatment of
-extensive properties in two-phase flash calculations.
-
-References (thermodynamic identities cited in this file):
-- Smith, J. M., Van Ness, H. C., Abbott, M. M., and Swihart, M. T.
-  Introduction to Chemical Engineering Thermodynamics, 8th ed.,
-  McGraw-Hill, 2018. (Flash calculations and lever rule sections)
-- Prausnitz, J. M., Lichtenthaler, R. N., and de Azevedo, E. G.
-  Molecular Thermodynamics of Fluid-Phase Equilibria, 3rd ed.,
-  Prentice Hall, 1998. (Phase equilibrium and flash derivations)
-- MIT Unified Engineering Thermodynamics Notes, Node 69
-  (lever-rule derivation): https://web.mit.edu/16.unified/www/FALL/thermodynamics/notes/node69.html
-
-# BREADCRUMB:
-# Date: 2026-03-02
-# Assumptions:
-# - Binary VLE solved from P equality and component chemical-potential equality.
-# - Chemical potentials are evaluated from fugacity using analytic composition
-#   derivatives of n*alpha^r.
-# - Bubble curve fixes liquid composition x=z; dew curve fixes vapor composition y=z.
-# - This module is isolated from compute_pressure_enthalpy workflow.
-# TODO: Add optional finite-difference mu_i cross-check for debugging.
-# TODO: Keep thermodynamic identities cited in docstrings when equations are added.
+Context breadcrumbs
+-------------------
+Copied from: mixture_true_vle_copy.py
+Date copied: 2026-03-03
+Source commit hash: b3ec3a5b110deb36eb47e109259ea4a8a6ed6eae
+Reason: Preserve rigorous true-mixture VLE solver for future non-azeotropic
+mixtures and branch-behavior diagnostics.
+Related diagnostics:
+- diagnostics/honeywell_glide_test_20260303.csv
+- diagnostics/honeywell_glide_dx_check_20260303.csv
+- verification/r515b_true_vle_envelope_*.png
+Notes:
+- This file is intentionally frozen. Make changes only in a new module derived
+  from this one.
 """
 
 from __future__ import annotations
@@ -71,6 +53,13 @@ from linear_model_codex import (
     mixture_alpha0_alphar_derivs,
     mw_from_json,
 )
+
+__all__ = [
+    "solve_bubble_at_t",
+    "solve_dew_at_t",
+    "run_true_vle_envelope",
+    "plot_envelope",
+]
 
 
 EPS_X = 1e-12

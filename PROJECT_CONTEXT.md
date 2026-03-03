@@ -570,3 +570,76 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   `verification/r515b_true_vle_envelope_raw_nopostprocess_20260303.png`.
   Raw-plot source branches: `verification/r515b_true_vle_bubble_dome_branch_tuned_20260303.csv`,
   `verification/r515b_true_vle_dew_dome_branch_tuned_20260303.csv` (both `200/200` converged).
+
+## 2026-03-03 — β-parameterized two-phase band added
+
+- Two-phase mixture enthalpy now computed via lever rule:
+    h = (1 - β) h_l + β h_v
+- References:
+    - Smith, Van Ness & Abbott
+    - Prausnitz et al.
+    - MIT Unified Thermodynamics Notes (Node 69)
+- Purpose:
+    Correct representation of mixture VLE envelope in P–h space.
+- 2026-03-03: Re-generated saturation dome using branch-tuned solver profiles and in-module β-band plotting:
+  - `verification/r515b_true_vle_bubble_dome_beta_20260303.csv`
+  - `verification/r515b_true_vle_dew_dome_beta_20260303.csv`
+  - `verification/r515b_true_vle_envelope_beta_band_20260303.png`
+  - `verification/r515b_true_vle_dome_beta_metadata_20260303.json`
+  Convergence: bubble `200/200`, dew `200/200`.
+
+## 2026-03-03 — Frozen true VLE reference module
+
+- Created: `mixture_vle_true_reference.py`
+- Copied from: `mixture_true_vle_copy.py`
+- Purpose: preserve μ-equality mixture VLE solver for future non-azeotropic mixtures
+- Guard: `tests/test_true_vle_reference_frozen.py` (3-point regression)
+- Source commit hash at copy time: `b3ec3a5b110deb36eb47e109259ea4a8a6ed6eae`
+- 2026-03-03: Ran targeted Honeywell-grid azeotrope logic test at each PT-table temperature:
+  bubble solve with `x=z`, dew solve with `y=z`, then logged
+  `delta_x1 = y1_from_bubble - x1_from_dew`.
+  Output CSV: `diagnostics/honeywell_azeotrope_dx_test_20260303.csv`.
+  Summary:
+  - points: `49`, converged bubble/dew: `49/49` each
+  - `max |delta_x1| = 0.052089715988` (at `T=-19.22 C`)
+  - `mean |delta_x1| = 0.008993712315`
+  - `p95 |delta_x1| = 0.033902202016`
+  Interpretation: `delta_x1` is not numerically tiny across the full table, so the tuned branch solutions are not behaving as an azeotrope-like `x≈y` path over the full range.
+
+## 2026-03-03 — Fixed-Pressure Glide Test
+
+- CSV: `diagnostics/honeywell_glide_test_20260303.csv`
+- Max dT_glide: `0.267650315562 K`
+- Mean dT_glide: `0.029085725643 K`
+- p95 dT_glide: `0.142774483082 K`
+- Convergence: `49/49` bubble fix-P solves, `49/49` dew fix-P solves
+- Worst pressure point: `P=100.0 kPa` with
+  `T_bubble=252.890667853297 K`,
+  `T_dew=253.158318168859 K`,
+  `dT_glide=0.267650315562 K`.
+- Failures: none (`bubble_fixP_status='OK'` for all rows, `dew_fixP_status='OK'` for all rows).
+
+## 2026-03-03 — Mixture Behavior Classification (from fixed-P glide)
+
+- Classification: **Near-azeotropic**
+- Rule used:
+  - Strict azeotrope if `Max dT_glide < 0.1 K`
+  - Near-azeotropic if `0.1 K <= Max dT_glide <= 1 K`
+  - Zeotropic if `Max dT_glide > 1 K`
+- Computed metrics from `diagnostics/honeywell_glide_test_20260303.csv`:
+  - `Max dT_glide = 0.267650315562 K`
+  - `Mean dT_glide = 0.029085725643 K`
+  - `p95 dT_glide = 0.142774483082 K`
+
+## 2026-03-03 — Fixed-Pressure Composition Split Check
+
+- CSV: `diagnostics/honeywell_glide_dx_check_20260303.csv`
+- Definition used: `delta_x1_abs = |y1_bubble(P) - x1_dew(P)|`
+- Summary metrics:
+  - `max |delta_x1| = 0.053102925668`
+  - `mean |delta_x1| = 0.009162151968`
+  - `p95 |delta_x1| = 0.034530793824`
+- Negligibility assessment:
+  - Composition split is **not negligible** over the full pressure range (cold/low-pressure end shows largest separation).
+- Correlation with glide:
+  - Pearson correlation between `|delta_x1|` and `|dT_glide|` is `0.977504486911` (strong positive correlation).
