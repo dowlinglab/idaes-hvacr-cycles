@@ -1152,3 +1152,231 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`
   - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`
   - `diagnostics/plots/ph_layer6_manifest_20260303.json`
+- 2026-03-03: Implemented continuation-based liquid branch tracing guards in
+  `scripts/plot_pseudopure_isodiagram.py` (plotting-only), including:
+  - anchor at interpolated `rho_f(T)` from pseudo-pure saturation table
+  - first-point solve at `P_sat+eps` with initial/bracket near `rho_f`
+  - continuation with `rho_previous` for subsequent liquid pressures
+  - hard guards: `rho > rho_f(T)` and `(dP/drho)_T > 0`.
+  Observed 70 C diagnostic blocker under strict guards:
+  - interpolated `rho_f(70 C) = 978.452499443 kg/m^3`
+  - at `P_sat+1 kPa`, scan over `rho in [rho_f, 2000] kg/m^3` found
+    `0` sign-change brackets for `P(T,rho)-P_target`, i.e., no valid
+    liquid-root candidate satisfying `rho > rho_f`.
+  Consequence:
+  - strict-guard run produced connector + vapor segment but no accepted liquid
+    segment points for 70 C (`phase_flag` counts: vapor 20, connector 2, liquid 0
+    in latest debug run with reduced point count).
+
+## 2026-03-03 — Pseudo-Pure Isotherm Continuation Anchors (Root Selection Update)
+
+- File updated (plotting/numerics only): `scripts/plot_pseudopure_isodiagram.py`
+- Change implemented:
+  - Replaced pseudo-table density anchors with direct TP root anchors at saturation pressure:
+    - `rho_f(T) := solve_rho_mass_for_P(T, P_sat(T), phase_hint="liquid")`
+    - `rho_g(T) := solve_rho_mass_for_P(T, P_sat(T), phase_hint="vapor")`
+  - Kept continuation and monotonic guards:
+    - liquid branch monotone increasing in rho with pressure
+    - vapor branch monotone decreasing in rho with pressure
+    - mechanical-stability gate `(dP/drho)_T > 0`
+  - Kept first-point bracket diagnostics for 70 C:
+    - liquid: `[rho_f, 1.05*rho_f]` then `rho_hi *= 1.2`
+    - vapor: `[0.95*rho_g, rho_g]` then `rho_lo *= 0.8`.
+
+- 70 C run diagnostics after anchor fix (`python3 scripts/plot_pseudopure_isodiagram.py --temps-c=70 --Pmin-bar=1 --Pmax-bar=35 --eps-kpa=1 --nv=80 --nl=80`):
+  - `P_sat(70 C) = 1,616,929.731223707 Pa = 16.169297312 bar`
+  - `rho_f(70 C) = 463.069935688 kg/m^3`
+  - `rho_g(70 C) = 87.204087463 kg/m^3`
+  - first liquid bracket at `P_sat + 1 kPa`:
+    - `[463.069935688, 472.331334402] kg/m^3`
+    - `F(lo) = -0.999996974 kPa`, `F(hi) = 654.324985057 kPa`
+    - solved first liquid root: `rho_first_liquid = 463.084906212 kg/m^3`
+    - `dP/drho_first_liquid = 66.789800933 kPa/(kg/m^3)`
+  - solved first vapor root: `rho_first_vapor = 87.129201411 kg/m^3`
+    - `dP/drho_first_vapor = 13.362471418 kPa/(kg/m^3)`
+  - monotonicity violations:
+    - liquid `0`
+    - vapor `0`
+
+- Current known limitation (explicit):
+  - Pseudo-saturation table enthalpies (`h_l_kJkg`, `h_v_kJkg`) used for dome drawing are not on the same numerical enthalpy basis as single-phase values returned in the current TP branch path of `pressure_validated_model`.
+  - Effect: branch-start `h` continuity checks against table `h_f/h_g` can fail even when pressure-root continuation is correct.
+  - This is a plotting-basis consistency issue, not an EOS-equation change.
+
+- Updated artifacts:
+  - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+  - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+  - `diagnostics/pseudopure_iso/pseudopure_isotherm_overlays_20260303.csv`
+
+## 2026-03-03 — Rollback for 70C Isotherm Debug (User-directed)
+
+- User-directed rollback applied:
+  - Reverted recent forced root-anchor/continuation edits in
+    `scripts/plot_pseudopure_isodiagram.py`.
+  - Intent: debug baseline pseudo-pure isotherm behavior at `T=70 C`.
+
+- 70 C debug run executed (single-temperature only):
+  - Command:
+    `python3 scripts/plot_pseudopure_isodiagram.py --temps-c=70 --Pmin-bar=1 --Pmax-bar=35 --eps-kpa=1 --nv=80 --nl=80`
+  - Outputs regenerated:
+    - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+    - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+
+- Printed diagnostics:
+  - `P_sat(70C)=16.169297312 bar`
+  - `h_f(70C)=301.269002697 kJ/kg`
+  - `h_g(70C)=418.655032863 kJ/kg`
+  - `vapor_Pmax_bar=16.159297311` (target `P_sat-eps`)
+  - `connector_pressure_bar=16.169297312` (exact `P_sat`).
+
+- Current debug observation:
+  - CSV phase counts: `vapor=80`, `two_phase_connector=2`, `liquid=0`.
+  - This confirms current baseline failure mode is absence of liquid branch
+    in the 70 C pseudo-pure isotherm path.
+
+## 2026-03-03 — 70C Isotherm Debug: Removed Liquid Guard
+
+- User-directed change (plotting/root-selection only):
+  - Removed liquid-branch rejection guard in `scripts/plot_pseudopure_isodiagram.py`:
+    - deleted block that rejected/retried whenever `rho < rho_f_mass`.
+
+- Motivation:
+  - At 70 C, pseudo-table anchor `rho_f_mass` (~978.45 kg/m^3) was inconsistent
+    with the TP root returned by current pressure solve at `P_sat+1 kPa`
+    (~463.08 kg/m^3), causing all liquid points to be skipped.
+
+- Re-run (70 C only) results:
+  - Command:
+    `python3 scripts/plot_pseudopure_isodiagram.py --temps-c=70 --Pmin-bar=1 --Pmax-bar=35 --eps-kpa=1 --nv=80 --nl=80`
+  - Phase counts in CSV:
+    - vapor = 80
+    - liquid = 80
+    - two_phase_connector = 2
+  - Artifacts regenerated:
+    - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+    - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+
+- Current note:
+  - Liquid branch now exists for debugging, but enthalpy-basis consistency against
+    pseudo-saturation endpoint values remains an open issue.
+
+## 2026-03-03 — A/B Engine Diagnostic at 70C (Same T,P grid)
+
+- Diagnostic generated to isolate vapor-branch mismatch source:
+  - `diagnostics/ab_compare_70C_pvm_vs_mtvle_20260303.csv`
+  - comparison setup:
+    - pressure grid includes low-P points and near-saturation points
+    - solve roots with `pressure_validated_model` (PVM)
+    - evaluate the same `(T,rho)` in `mixture_true_vle_copy` (MTVLE)
+    - compare `p` and `h` deltas at identical state points.
+
+- Key results:
+  - Vapor branch at low pressure (`P=1..35 kPa`) is nearly consistent between engines:
+    - `dp_vapor ~ O(1e-5..1e-2) kPa`
+    - `dh_vapor ~ O(1e-3..1e-2) kJ/kg`.
+  - Near saturation (`P~1616.93 kPa`), vapor state diverges strongly at same rho:
+    - `dp_vapor (MTVLE - PVM) ~ -89.5 kPa`
+    - `dh_vapor (MTVLE - PVM) ~ -11.76 kJ/kg`.
+  - Liquid-state divergence is much larger at same rho:
+    - near saturation: `dp_liquid ~ -1981 kPa`, `dh_liquid ~ -57.75 kJ/kg`
+    - low pressure (liquid root branch): large nonphysical pressure mismatch confirms branch/path inconsistency.
+
+- Interpretation for current debugging:
+  - Missing alignment at isotherm endpoint is not numerical precision.
+  - The plotted dome endpoints and isotherm single-phase points are sourced from thermodynamic paths/engines that are not mutually consistent near saturation.
+
+## 2026-03-03 — Pseudo-Pure Isotherm Pressure Window Default Updated
+
+- User-directed plotting-window correction:
+  - Updated `scripts/plot_pseudopure_isodiagram.py` defaults:
+    - `P_plot_max_bar` in `build_pseudopure_isotherm_segments`: `35.0 -> 100.0`
+    - CLI default `--Pmax-bar`: `35.0 -> 100.0`
+
+- Verification run (70 C, defaults):
+  - command: `python3 scripts/plot_pseudopure_isodiagram.py --temps-c=70 --nv=80 --nl=80`
+  - output CSV check:
+    - `liquid_count=80`
+    - `liquid_P_max_bar=100.000000187`
+
+- Artifacts regenerated:
+  - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+  - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+
+## 2026-03-03 — Root Audit 70C (Bracket vs Fallback)
+
+- Added diagnostics script:
+  - `scripts/audit_isotherm_roots_70c.py`
+  - Purpose: audit all sign-change intervals and selected roots for 70 C isotherm branches.
+
+- Run outputs:
+  - `diagnostics/root_audit_70C_summary_20260303.csv`
+  - `diagnostics/root_audit_70C_intervals_20260303.csv`
+
+- Headline findings (70 C):
+  - `steps_total = 160` (vapor 80 + liquid 80)
+  - `multi_interval_steps = 150`
+  - `fallback_steps = 157`
+    - `fallback_vapor = 79/80`
+    - `fallback_liquid = 78/80`
+  - Interval-count distribution:
+    - vapor: all `80` steps had `3` sign-change intervals
+    - liquid: `70` steps had `3` intervals, `10` steps had `1` interval.
+
+- Interpretation:
+  - Current branch tracing is dominated by fallback root selection rather than
+    stable local continuation bracket picks.
+  - This supports the hypothesis that root-jumping/missing-branch behavior is
+    primarily driven by bracket selection and fallback basin choice, not plotting.
+
+## 2026-03-03 — Bracket Enumeration + Continuation Selector (Pseudo-Pure Isotherm)
+
+- Implemented in `scripts/plot_pseudopure_isodiagram.py` (no EOS/reference-state edits):
+  - Added full bracket enumeration helper:
+    - `enumerate_pressure_root_brackets(...)`
+  - Added solve-all-candidates helper:
+    - `_solve_candidates_from_brackets(...)`
+  - Replaced branch inversion with stateful continuation tracer:
+    - `_trace_branch_with_continuation(...)`
+
+- Selection logic now enforces hard gates per candidate:
+  - pressure residual `|P-P_target| <= tolP` (default `1e-2 kPa`)
+  - mechanical stability `(dP/drho)_T > 0`
+  - basin guard via `rho_split = sqrt(rho_f * rho_g)`
+    - vapor: `rho < rho_split`
+    - liquid: `rho > rho_split`
+  - monotonic continuation (upward pressure march): `rho_k >= rho_{k-1}` after first accepted point.
+
+- Fallback policy changed:
+  - fallback solver can be invoked only as seed for local bracket retry;
+  - fallback rho is never accepted directly.
+  - reported metric: `fallback_accept_count` (must remain 0).
+
+- Added adaptive retry:
+  - if multiple brackets and no eligible candidate, retry once at half-step pressure.
+
+- Required 70 C instrumentation added:
+  - selection trace CSV:
+    - `diagnostics/pseudopure_iso/T_70C_selection_trace_20260303.csv`
+  - per-step fields include:
+    - number of brackets
+    - candidate rhos
+    - rejection reasons
+    - chosen rho/cost
+    - fallback seed usage
+    - stop reason if branch terminates.
+
+- 70 C run results after selector replacement:
+  - output CSV phase counts:
+    - vapor = 80
+    - liquid = 80
+    - connector = 2
+  - fallback usage:
+    - `fallback_invocations = 0`
+    - `fallback_accept_count = 0`
+  - branch stop reasons: empty (both branches completed)
+  - liquid enthalpy minimum: `266.34 kJ/kg` (>100 kJ/kg).
+
+- Regenerated artifacts:
+  - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+  - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+  - `diagnostics/pseudopure_iso/T_70C_selection_trace_20260303.csv`

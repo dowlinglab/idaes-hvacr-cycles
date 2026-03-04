@@ -21,7 +21,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 import sys
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -100,6 +100,7 @@ def interp_pseudopure_sat_at_T(sat_df: pd.DataFrame, T_C: float) -> Dict[str, fl
         "h_f_kJkg": float(np.interp(T_K, x, sat_df["h_l_kJkg"].to_numpy(dtype=float))),
         "h_g_kJkg": float(np.interp(T_K, x, sat_df["h_v_kJkg"].to_numpy(dtype=float))),
         "rho_f_molm3": float(np.interp(T_K, x, sat_df["rho_l_molm3"].to_numpy(dtype=float))),
+        "rho_g_molm3": float(np.interp(T_K, x, sat_df["rho_v_molm3"].to_numpy(dtype=float))),
     }
 
 
@@ -235,12 +236,360 @@ def _find_sign_change_bracket_near(
     raise ValueError("no sign-change bracket found")
 
 
+def enumerate_pressure_root_brackets(
+    T_K: float,
+    P_target_kPa: float,
+    w1: float,
+    w2: float,
+    rho_min: float,
+    rho_max: float,
+    n_grid: int = 2500,
+) -> List[Tuple[float, float]]:
+    """
+    Enumerate all sign-change brackets for pressure roots at fixed (T, P).
+
+    Thermodynamic basis
+    -------------------
+    Root condition:
+      f(rho) = P(T, rho) - P_target = 0
+    A sign change over [rho_i, rho_{i+1}] implies a bracketed root candidate.
+
+    Inputs
+    ------
+    T_K : float [K]
+    P_target_kPa : float [kPa]
+    w1 : float [kg/kg]
+    w2 : float [kg/kg]
+    rho_min : float [kg/m^3]
+    rho_max : float [kg/m^3]
+    n_grid : int [-]
+
+    Outputs
+    -------
+    List[Tuple[float,float]] [kg/m^3]
+      Full list of sign-change intervals.
+
+    Assumptions
+    -----------
+    - Density range covers all physically relevant roots for current branch tracing.
+
+    Failure modes
+    -------------
+    - Coarse scan can miss narrow brackets.
+    - Invalid state evaluations produce NaNs and those pairs are skipped.
+
+    References
+    ----------
+    - Bracketed root-finding via sign change for one-dimensional nonlinear equations.
+
+    Notes on numerical stability
+    ----------------------------
+    - Log-density spacing improves low-density resolution.
+    """
+    interaction = default_interaction()
+
+    def f(rho: float) -> float:
+        return compute_props("r1234ze.json", "r227ea.json", T_K, float(rho), w1, w2, interaction).p - P_target_kPa
+
+    grid = np.logspace(np.log10(max(rho_min, 1e-12)), np.log10(max(rho_max, rho_min * 1.001)), int(n_grid))
+    vals = np.full_like(grid, np.nan, dtype=float)
+    for i, rr in enumerate(grid):
+        try:
+            vals[i] = f(float(rr))
+        except Exception:
+            vals[i] = np.nan
+
+    brackets: List[Tuple[float, float]] = []
+    for i in range(len(grid) - 1):
+        v1 = vals[i]
+        v2 = vals[i + 1]
+        if np.isfinite(v1) and np.isfinite(v2) and v1 * v2 <= 0.0:
+            brackets.append((float(grid[i]), float(grid[i + 1])))
+    return brackets
+
+
+def _solve_candidates_from_brackets(
+    T_K: float,
+    P_target_kPa: float,
+    w1: float,
+    w2: float,
+    brackets: List[Tuple[float, float]],
+    tolP_kPa: float,
+) -> List[Dict[str, Any]]:
+    """
+    Solve each bracket to candidate rho and compute gate diagnostics.
+
+    Inputs
+    ------
+    T_K : float [K]
+    P_target_kPa : float [kPa]
+    w1, w2 : float [kg/kg]
+    brackets : list of (rho_lo, rho_hi) [kg/m^3]
+    tolP_kPa : float [kPa]
+
+    Outputs
+    -------
+    List[Dict]
+      Candidate records with rho, residual, stability and state properties.
+
+    Assumptions
+    -----------
+    - Brackets are valid sign-change intervals.
+
+    Failure modes
+    -------------
+    - Solver can fail for near-degenerate brackets.
+
+    References
+    ----------
+    - Pressure residual and stability gate: (dP/drho)_T > 0.
+
+    Notes on numerical stability
+    ----------------------------
+    - Strict residual threshold prevents acceptance of loose numerical roots.
+    """
+    out: List[Dict[str, Any]] = []
+    for idx, (lo, hi) in enumerate(brackets):
+        rec: Dict[str, Any] = {
+            "candidate_index": int(idx),
+            "rho_lo": float(lo),
+            "rho_hi": float(hi),
+            "rho": np.nan,
+            "p_res_kPa": np.nan,
+            "dPdrho": np.nan,
+            "stable": False,
+            "res_ok": False,
+            "p_kPa": np.nan,
+            "h_kJkg": np.nan,
+            "solve_error": "",
+        }
+        try:
+            rho = _solve_rho_pressure_with_bracket(T_K, P_target_kPa, w1, w2, float(lo), float(hi))
+            st = compute_props("r1234ze.json", "r227ea.json", T_K, float(rho), w1, w2, default_interaction())
+            p_res = abs(float(st.p) - float(P_target_kPa))
+            dPdrho = _dPdrho_num_kpa_per_kgm3(T_K, float(rho), w1, w2)
+            rec.update(
+                {
+                    "rho": float(rho),
+                    "p_kPa": float(st.p),
+                    "h_kJkg": float(st.h),
+                    "p_res_kPa": float(p_res),
+                    "dPdrho": float(dPdrho),
+                    "stable": bool(np.isfinite(dPdrho) and dPdrho > 0.0),
+                    "res_ok": bool(np.isfinite(p_res) and p_res <= tolP_kPa),
+                }
+            )
+        except Exception as exc:
+            rec["solve_error"] = str(exc)
+        out.append(rec)
+    return out
+
+
+def _trace_branch_with_continuation(
+    branch: str,
+    T_K: float,
+    P_grid_kPa: np.ndarray,
+    w1: float,
+    w2: float,
+    rho_prev0: float,
+    rho_anchor: float,
+    rho_split: float,
+    tolP_kPa: float = 1e-2,
+    n_grid_scan: int = 2500,
+    rho_min_scan: float = 1e-6,
+    rho_max_scan: float = 2000.0,
+    anchor_steps: int = 5,
+    anchor_lambda: float = 0.05,
+) -> Tuple[List[Tuple[float, float, str]], pd.DataFrame, Dict[str, Any]]:
+    """
+    Trace one isotherm branch via bracket enumeration + continuation selector.
+
+    Thermodynamic basis
+    -------------------
+    For each pressure step, solve all bracketed roots of:
+      P(T, rho) - P_target = 0
+    Eligible candidates must satisfy:
+      1) |P(T,rho)-P_target| <= tolP
+      2) (dP/drho)_T > 0
+      3) Basin guard:
+         vapor => rho < rho_split
+         liquid => rho > rho_split
+      4) Monotonic continuation for upward pressure march:
+         rho_k >= rho_{k-1}
+
+    Selection rule
+    --------------
+    Minimize continuity cost:
+      cost = |rho_i - rho_prev| / max(1, rho_prev)
+    For first `anchor_steps`, tie-break with anchor penalty:
+      + lambda * |rho_i - rho_anchor| / max(1, rho_anchor)
+
+    Fallback policy
+    ---------------
+    Fallback solver is used only to seed a local bracket retry and never accepted
+    directly as a branch point.
+
+    Inputs/Outputs
+    --------------
+    Returns:
+      - accepted points as (P_bar, h_kJkg, phase_flag)
+      - per-step selection trace DataFrame
+      - summary metrics dictionary
+    """
+    accepted: List[Tuple[float, float, str]] = []
+    trace_rows: List[Dict[str, Any]] = []
+    rho_prev = float(rho_prev0)
+    has_prev = False
+    p_prev = np.nan
+    fallback_invocations = 0
+    fallback_accept_count = 0
+    stop_reason = ""
+
+    for step, p_target in enumerate(np.asarray(P_grid_kPa, dtype=float)):
+        brackets = enumerate_pressure_root_brackets(
+            T_K, float(p_target), w1, w2, rho_min_scan, rho_max_scan, n_grid=n_grid_scan
+        )
+
+        candidates = _solve_candidates_from_brackets(T_K, float(p_target), w1, w2, brackets, tolP_kPa=tolP_kPa)
+        rejected: List[str] = []
+        eligible: List[Dict[str, Any]] = []
+        for c in candidates:
+            if not np.isfinite(c["rho"]):
+                rejected.append(f"c{c['candidate_index']}:solve")
+                continue
+            if not c["res_ok"]:
+                rejected.append(f"c{c['candidate_index']}:res")
+                continue
+            if not c["stable"]:
+                rejected.append(f"c{c['candidate_index']}:stability")
+                continue
+            if branch == "vapor" and not (float(c["rho"]) < rho_split):
+                rejected.append(f"c{c['candidate_index']}:basin")
+                continue
+            if branch == "liquid" and not (float(c["rho"]) > rho_split):
+                rejected.append(f"c{c['candidate_index']}:basin")
+                continue
+            if has_prev and float(c["rho"]) < rho_prev * (1.0 - 1e-9):
+                rejected.append(f"c{c['candidate_index']}:mono")
+                continue
+            eligible.append(c)
+
+        retried_with_half_step = False
+        if len(eligible) == 0 and len(brackets) > 1 and np.isfinite(p_prev):
+            retried_with_half_step = True
+            p_retry = 0.5 * (float(p_prev) + float(p_target))
+            brackets_r = enumerate_pressure_root_brackets(
+                T_K, float(p_retry), w1, w2, rho_min_scan, rho_max_scan, n_grid=n_grid_scan
+            )
+            candidates_r = _solve_candidates_from_brackets(T_K, float(p_retry), w1, w2, brackets_r, tolP_kPa=tolP_kPa)
+            for c in candidates_r:
+                if not np.isfinite(c["rho"]) or not c["res_ok"] or not c["stable"]:
+                    continue
+                if branch == "vapor" and not (float(c["rho"]) < rho_split):
+                    continue
+                if branch == "liquid" and not (float(c["rho"]) > rho_split):
+                    continue
+                if has_prev and float(c["rho"]) < rho_prev * (1.0 - 1e-9):
+                    continue
+                eligible.append(c)
+            if len(eligible) > 0:
+                p_target = float(p_retry)
+                brackets = brackets_r
+                candidates = candidates_r
+
+        fallback_seed_used = False
+        if len(eligible) == 0:
+            fallback_invocations += 1
+            rho_guess = solve_rho_mass_for_P(
+                T_K=T_K,
+                P_target_kPa=float(p_target),
+                comp1_json="r1234ze.json",
+                comp2_json="r227ea.json",
+                w1=w1,
+                w2=w2,
+                interaction=default_interaction(),
+                phase_hint=branch,
+            )
+            if rho_guess is not None and np.isfinite(rho_guess):
+                fallback_seed_used = True
+                lo_seed = max(rho_min_scan, 0.85 * float(rho_guess))
+                hi_seed = min(rho_max_scan, max(lo_seed * 1.001, 1.15 * float(rho_guess)))
+                brackets_local = enumerate_pressure_root_brackets(
+                    T_K, float(p_target), w1, w2, lo_seed, hi_seed, n_grid=max(600, int(n_grid_scan // 2))
+                )
+                candidates_local = _solve_candidates_from_brackets(
+                    T_K, float(p_target), w1, w2, brackets_local, tolP_kPa=tolP_kPa
+                )
+                for c in candidates_local:
+                    if not np.isfinite(c["rho"]) or not c["res_ok"] or not c["stable"]:
+                        continue
+                    if branch == "vapor" and not (float(c["rho"]) < rho_split):
+                        continue
+                    if branch == "liquid" and not (float(c["rho"]) > rho_split):
+                        continue
+                    if float(c["rho"]) < rho_prev * (1.0 - 1e-9):
+                        continue
+                    eligible.append(c)
+
+        chosen: Optional[Dict[str, Any]] = None
+        if len(eligible) > 0:
+            def _cost(c: Dict[str, Any]) -> float:
+                base = abs(float(c["rho"]) - rho_prev) / max(1.0, abs(rho_prev))
+                if step < anchor_steps:
+                    base += float(anchor_lambda) * abs(float(c["rho"]) - rho_anchor) / max(1.0, abs(rho_anchor))
+                return float(base)
+
+            chosen = min(eligible, key=_cost)
+            cost_val = abs(float(chosen["rho"]) - rho_prev) / max(1.0, abs(rho_prev))
+            st = compute_props("r1234ze.json", "r227ea.json", T_K, float(chosen["rho"]), w1, w2, default_interaction())
+            accepted.append((float(st.p * 1.0e-2), float(st.h), branch))
+            rho_prev = float(chosen["rho"])
+            has_prev = True
+            p_prev = float(p_target)
+            if fallback_seed_used:
+                fallback_accept_count += 0
+        else:
+            cost_val = np.nan
+            if len(brackets) == 0:
+                stop_reason = "no_brackets"
+            elif retried_with_half_step:
+                stop_reason = "no_eligible_after_half_step_retry"
+            else:
+                stop_reason = "no_eligible_candidates"
+
+        trace_rows.append(
+            {
+                "branch": branch,
+                "step_index": int(step),
+                "P_target_kPa": float(p_target),
+                "n_brackets": int(len(brackets)),
+                "candidate_rhos_kgm3": "|".join([f"{c['rho']:.12g}" for c in candidates if np.isfinite(c["rho"])]),
+                "rejected_reasons": ";".join(rejected),
+                "chosen_rho_kgm3": np.nan if chosen is None else float(chosen["rho"]),
+                "chosen_h_kJkg": np.nan if chosen is None else float(chosen["h_kJkg"]),
+                "chosen_cost": float(cost_val) if np.isfinite(cost_val) else np.nan,
+                "fallback_seed_used": bool(fallback_seed_used),
+                "accepted": bool(chosen is not None),
+                "stop_reason": stop_reason if chosen is None else "",
+            }
+        )
+
+        if chosen is None:
+            break
+
+    return accepted, pd.DataFrame(trace_rows), {
+        "fallback_invocations": int(fallback_invocations),
+        "fallback_accept_count": int(fallback_accept_count),
+        "stop_reason": stop_reason,
+    }
+
+
 def build_pseudopure_isotherm_segments(
     sat_df: pd.DataFrame,
     T_C: float,
     w1: float = 0.911,
     P_plot_min_bar: float = 1.0,
-    P_plot_max_bar: float = 35.0,
+    P_plot_max_bar: float = 100.0,
     eps_kPa: float = 1.0,
     n_vapor: int = 80,
     n_liquid: int = 80,
@@ -280,94 +629,56 @@ def build_pseudopure_isotherm_segments(
     vapor_hi_bar = max(P_plot_min_bar, P_sat_bar - eps_kPa * 1.0e-2)
     liquid_lo_bar = min(P_plot_max_bar, P_sat_bar + eps_kPa * 1.0e-2)
 
+    rho_g_mass = sat["rho_g_molm3"] * mw_mix
+    rho_split = float(np.sqrt(max(1e-12, rho_f_mass * rho_g_mass)))
+    sat["rho_f_mass_kgm3"] = float(rho_f_mass)
+    sat["rho_g_mass_kgm3"] = float(rho_g_mass)
+    sat["rho_split_kgm3"] = float(rho_split)
+
     vapor_points: List[Tuple[float, float, str]] = []
+    vapor_trace = pd.DataFrame()
+    vapor_metrics: Dict[str, Any] = {}
     if vapor_hi_bar > P_plot_min_bar:
         P_v_kPa = np.logspace(np.log10(P_plot_min_bar * 100.0), np.log10(vapor_hi_bar * 100.0), int(n_vapor))
-        vapor_points = single_phase_points_at_TP_grid(T_K, P_v_kPa, "vapor", w1, w2)
+        vapor_points, vapor_trace, vapor_metrics = _trace_branch_with_continuation(
+            branch="vapor",
+            T_K=T_K,
+            P_grid_kPa=P_v_kPa,
+            w1=w1,
+            w2=w2,
+            rho_prev0=float(rho_g_mass),
+            rho_anchor=float(rho_g_mass),
+            rho_split=float(rho_split),
+        )
 
     liquid_points: List[Tuple[float, float, str]] = []
+    liquid_trace = pd.DataFrame()
+    liquid_metrics: Dict[str, Any] = {}
     if P_plot_max_bar > liquid_lo_bar:
         P_l_kPa = np.logspace(np.log10(liquid_lo_bar * 100.0), np.log10(P_plot_max_bar * 100.0), int(n_liquid))
-        # Continuation-based liquid branch tracing anchored at rho_f(T).
-        rho_prev = float(rho_f_mass)
-        first_diag = None
-        for i, Pk in enumerate(P_l_kPa):
-            # First point: bracket around rho_f(T).
-            if i == 0:
-                try:
-                    lo, hi = _find_sign_change_bracket_near(T_K, float(Pk), w1, w2, rho_prev, rho_prev, 2000.0)
-                    rho = _solve_rho_pressure_with_bracket(T_K, float(Pk), w1, w2, lo, hi)
-                    if rho <= 0.9 * rho_f_mass:
-                        # mandatory re-solve tighter near rho_f(T)
-                        lo, hi = _find_sign_change_bracket_near(T_K, float(Pk), w1, w2, rho_f_mass, rho_f_mass, 2000.0)
-                        rho = _solve_rho_pressure_with_bracket(T_K, float(Pk), w1, w2, lo, hi)
-                except Exception:
-                    rho = solve_rho_mass_for_P(
-                        T_K=T_K,
-                        P_target_kPa=float(Pk),
-                        comp1_json="r1234ze.json",
-                        comp2_json="r227ea.json",
-                        w1=w1,
-                        w2=w2,
-                        interaction=default_interaction(),
-                        phase_hint="liquid",
-                    )
-                    if rho is None or not np.isfinite(rho):
-                        continue
-            else:
-                try:
-                    lo, hi = _find_sign_change_bracket_near(T_K, float(Pk), w1, w2, rho_prev, rho_f_mass, 2000.0)
-                    rho = _solve_rho_pressure_with_bracket(T_K, float(Pk), w1, w2, lo, hi)
-                except Exception:
-                    rho = solve_rho_mass_for_P(
-                        T_K=T_K,
-                        P_target_kPa=float(Pk),
-                        comp1_json="r1234ze.json",
-                        comp2_json="r227ea.json",
-                        w1=w1,
-                        w2=w2,
-                        interaction=default_interaction(),
-                        phase_hint="liquid",
-                    )
-                    if rho is None or not np.isfinite(rho):
-                        continue
+        liquid_points, liquid_trace, liquid_metrics = _trace_branch_with_continuation(
+            branch="liquid",
+            T_K=T_K,
+            P_grid_kPa=P_l_kPa,
+            w1=w1,
+            w2=w2,
+            rho_prev0=float(rho_f_mass),
+            rho_anchor=float(rho_f_mass),
+            rho_split=float(rho_split),
+        )
 
-            # Hard guard against vapor root capture for liquid branch.
-            if rho < rho_f_mass:
-                try:
-                    lo, hi = _find_sign_change_bracket_near(T_K, float(Pk), w1, w2, max(rho_prev, rho_f_mass), rho_f_mass, 2000.0)
-                    rho = _solve_rho_pressure_with_bracket(T_K, float(Pk), w1, w2, lo, hi)
-                except Exception:
-                    rho = solve_rho_mass_for_P(
-                        T_K=T_K,
-                        P_target_kPa=float(Pk),
-                        comp1_json="r1234ze.json",
-                        comp2_json="r227ea.json",
-                        w1=w1,
-                        w2=w2,
-                        interaction=default_interaction(),
-                        phase_hint="liquid",
-                    )
-                    if rho is None or not np.isfinite(rho):
-                        continue
-                if rho < rho_f_mass:
-                    continue
-
-            dPdrho = _dPdrho_num_kpa_per_kgm3(T_K, rho, w1, w2)
-            if not np.isfinite(dPdrho) or dPdrho <= 0.0:
-                continue
-
-            st = compute_props("r1234ze.json", "r227ea.json", T_K, float(rho), w1, w2, default_interaction())
-            liquid_points.append((float(st.p * 1.0e-2), float(st.h), "liquid"))
-            rho_prev = float(rho)
-            if i == 0:
-                first_diag = (rho_f_mass, rho, float(st.h), dPdrho)
-
-        if first_diag is not None:
-            sat["rho_f_mass_kgm3"] = first_diag[0]
-            sat["rho_first_liquid_kgm3"] = first_diag[1]
-            sat["h_first_liquid_kJkg"] = first_diag[2]
-            sat["dPdrho_first_liquid"] = first_diag[3]
+    trace_df = pd.concat([vapor_trace, liquid_trace], ignore_index=True)
+    if abs(T_C - 70.0) < 1e-9:
+        trace_path = ROOT / "diagnostics/pseudopure_iso" / f"T_70C_selection_trace_{datetime.now().strftime('%Y%m%d')}.csv"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_df.to_csv(trace_path, index=False)
+        sat["selection_trace_csv"] = str(trace_path)
+        sat["fallback_accept_count"] = int(vapor_metrics.get("fallback_accept_count", 0) + liquid_metrics.get("fallback_accept_count", 0))
+        sat["fallback_invocations"] = int(vapor_metrics.get("fallback_invocations", 0) + liquid_metrics.get("fallback_invocations", 0))
+        sat["vapor_stop_reason"] = str(vapor_metrics.get("stop_reason", ""))
+        sat["liquid_stop_reason"] = str(liquid_metrics.get("stop_reason", ""))
+        print(f"selection_trace_csv={trace_path}")
+        print(f"fallback_accept_count={sat['fallback_accept_count']} (must be 0)")
 
     rows = []
     for p_bar, h_kJkg, _ in vapor_points:
@@ -406,7 +717,7 @@ def main() -> None:
     p.add_argument("--temps-c", default="70")
     p.add_argument("--w1", type=float, default=0.911)
     p.add_argument("--Pmin-bar", type=float, default=1.0)
-    p.add_argument("--Pmax-bar", type=float, default=35.0)
+    p.add_argument("--Pmax-bar", type=float, default=100.0)
     p.add_argument("--eps-kpa", type=float, default=1.0)
     p.add_argument("--nv", type=int, default=80)
     p.add_argument("--nl", type=int, default=80)
@@ -475,13 +786,19 @@ def main() -> None:
             print(f"h_f(70C)={sat['h_f_kJkg']:.9f} kJ/kg, h_g(70C)={sat['h_g_kJkg']:.9f} kJ/kg")
             if "rho_f_mass_kgm3" in sat:
                 print(f"rho_f(70C)={sat['rho_f_mass_kgm3']:.9f} kg/m^3")
-                print(f"rho_first_liquid(70C)={sat['rho_first_liquid_kgm3']:.9f} kg/m^3")
-                print(f"h_first_liquid(70C)={sat['h_first_liquid_kJkg']:.9f} kJ/kg")
-                print(f"dPdrho_first_liquid(70C)={sat['dPdrho_first_liquid']:.9f} kPa/(kg/m^3)")
+                print(f"rho_g(70C)={sat['rho_g_mass_kgm3']:.9f} kg/m^3")
+                print(f"rho_split(70C)={sat['rho_split_kgm3']:.9f} kg/m^3")
+            if "selection_trace_csv" in sat:
+                print(f"selection_trace_csv={sat['selection_trace_csv']}")
+                print(f"fallback_invocations={sat.get('fallback_invocations', np.nan)}")
+                print(f"fallback_accept_count={sat.get('fallback_accept_count', np.nan)}")
+                print(f"vapor_stop_reason={sat.get('vapor_stop_reason', '')}")
+                print(f"liquid_stop_reason={sat.get('liquid_stop_reason', '')}")
             if len(dv):
                 print(f"vapor_Pmax_bar={dv['P_bar'].max():.9f} (target P_sat-eps={(sat['P_sat_kPa']-args.eps_kpa)*1e-2:.9f})")
             if len(dl):
                 print(f"liquid_Pmin_bar={dl['P_bar'].min():.9f} (target P_sat+eps={(sat['P_sat_kPa']+args.eps_kpa)*1e-2:.9f})")
+                print(f"liquid_h_min_kJkg={dl['h_kJkg'].min():.9f}")
             if len(dc) == 2:
                 print(f"connector_pressure_bar={dc['P_bar'].iloc[0]:.9f} (exact P_sat)")
 
