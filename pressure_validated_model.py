@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
+
+from density_bracketing import (
+    bracket_vapor_liquid_density_roots,
+    default_density_bounds_from_critical,
+    format_bounds_log,
+)
 from idaes.models.properties.general_helmholtz import get_parameter_path
 
 try:
@@ -338,48 +344,72 @@ def default_interaction() -> InteractionParams:
 def solve_rho_mass_for_P(T_K: float, P_target_kPa: float, comp1_json="r1234ze.json", comp2_json="r227ea.json", w1=0.911, w2=0.089, interaction: Optional[InteractionParams] = None, phase_hint="vapor", rho_min=1e-3, rho_max=2e3, ngrid=600):
     if interaction is None:
         interaction = default_interaction()
-    rhos = np.logspace(np.log10(rho_min), np.log10(rho_max), ngrid)
-    vals = []
-    for rr in rhos:
-        st = compute_props(comp1_json, comp2_json, T_K, rr, w1, w2, interaction)
-        vals.append(st.p - P_target_kPa)
-    vals = np.array(vals)
+    comp1_data = load_json(comp1_json)
+    comp2_data = load_json(comp2_json)
+    _, _, MWmix = _mw_mix_from_mass_fractions(comp1_data, comp2_data, w1, w2)
 
-    brackets = []
-    for i in range(len(rhos) - 1):
-        f1, f2 = vals[i], vals[i + 1]
-        if np.isnan(f1) or np.isnan(f2):
-            continue
-        if f1 == 0.0:
-            brackets.append((rhos[i], rhos[i]))
-        elif f1 * f2 < 0.0:
-            brackets.append((rhos[i], rhos[i + 1]))
-    if not brackets:
+    rhoc1 = float(comp1_data["basic"]["rhoc"])
+    rhoc2 = float(comp2_data["basic"]["rhoc"])
+    bounds = default_density_bounds_from_critical(
+        (rhoc1, rhoc2),
+        rho_min_mass_kgm3=max(1.0e-4, float(rho_min)),
+        rho_split_mass_kgm3=50.0,
+        rho_max_cap_mass_kgm3=min(2000.0, float(rho_max)),
+        rhoc_scale_factor=3.0,
+    )
+
+    f_molar = lambda rho_mol: compute_props(
+        comp1_json,
+        comp2_json,
+        T_K,
+        float(rho_mol * MWmix),
+        w1,
+        w2,
+        interaction,
+    ).p - P_target_kPa
+
+    br = bracket_vapor_liquid_density_roots(
+        func_of_rho_molm3=f_molar,
+        mw_mix_kgmol=MWmix,
+        bounds=bounds,
+        vapor_points=max(120, int(ngrid // 2)),
+        liquid_points=max(120, int(ngrid // 2)),
+        fallback_points=max(600, int(2 * ngrid)),
+    )
+
+    if phase_hint == "liquid":
+        target_br = br.liquid_bracket_molm3
+    else:
+        target_br = br.vapor_bracket_molm3
+
+    if target_br is None:
+        print(
+            f"[density-bracket-fail] solve_rho_mass_for_P T={T_K} K, P={P_target_kPa} kPa, "
+            f"phase={phase_hint}, note={br.note}, bounds={format_bounds_log(bounds)}"
+        )
         return None
 
-    roots = []
-    for a, b in brackets:
-        if a == b:
-            roots.append(float(a))
-            continue
-        if _brentq is not None:
-            f = lambda rr: compute_props(comp1_json, comp2_json, T_K, rr, w1, w2, interaction).p - P_target_kPa
-            root = _brentq(f, a, b, maxiter=250)
-        else:
-            fa = compute_props(comp1_json, comp2_json, T_K, a, w1, w2, interaction).p - P_target_kPa
-            fb = compute_props(comp1_json, comp2_json, T_K, b, w1, w2, interaction).p - P_target_kPa
-            for _ in range(250):
-                m = 0.5 * (a + b)
-                fm = compute_props(comp1_json, comp2_json, T_K, m, w1, w2, interaction).p - P_target_kPa
-                if fa * fm <= 0.0:
-                    b, fb = m, fm
-                else:
-                    a, fa = m, fm
-            root = 0.5 * (a + b)
-        roots.append(float(root))
+    a_mass = target_br[0] * MWmix
+    b_mass = target_br[1] * MWmix
+    if a_mass == b_mass:
+        return float(a_mass)
 
-    roots = sorted(set(roots))
-    return roots[-1] if phase_hint == "liquid" else roots[0]
+    if _brentq is not None:
+        f = lambda rr: compute_props(comp1_json, comp2_json, T_K, rr, w1, w2, interaction).p - P_target_kPa
+        return float(_brentq(f, a_mass, b_mass, maxiter=250))
+
+    fa = compute_props(comp1_json, comp2_json, T_K, a_mass, w1, w2, interaction).p - P_target_kPa
+    fb = compute_props(comp1_json, comp2_json, T_K, b_mass, w1, w2, interaction).p - P_target_kPa
+    a = a_mass
+    b = b_mass
+    for _ in range(250):
+        mid = 0.5 * (a + b)
+        fm = compute_props(comp1_json, comp2_json, T_K, mid, w1, w2, interaction).p - P_target_kPa
+        if fa * fm <= 0.0:
+            b, fb = mid, fm
+        else:
+            a, fa = mid, fm
+    return float(0.5 * (a + b))
 
 
 def chart_offset(
@@ -427,4 +457,3 @@ def compute_props_with_chart_h(
     hoff, rho_ref_used = chart_offset(ref, comp1_json, comp2_json, w1, w2, interaction)
     h_chart = st.h + hoff
     return st, h_chart, hoff, rho_ref_used
-

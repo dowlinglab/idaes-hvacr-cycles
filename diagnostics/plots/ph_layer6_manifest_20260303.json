@@ -1,0 +1,22 @@
+{
+  "generated_at_utc": "2026-03-04T00:06:34.003036+00:00",
+  "git_hash_short": "af2ae3d",
+  "inputs": [
+    "diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv"
+  ],
+  "outputs": [
+    "diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png",
+    "diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf"
+  ],
+  "axis_limits": {
+    "h_kJkg": [
+      150.0,
+      500.0
+    ],
+    "p_bar": [
+      1.0,
+      35.0
+    ]
+  },
+  "log_pressure_axis": true
+}

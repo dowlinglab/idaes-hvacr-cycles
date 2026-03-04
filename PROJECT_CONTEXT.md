@@ -643,3 +643,512 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   - Composition split is **not negligible** over the full pressure range (cold/low-pressure end shows largest separation).
 - Correlation with glide:
   - Pearson correlation between `|delta_x1|` and `|dT_glide|` is `0.977504486911` (strong positive correlation).
+
+## 2026-03-03 — Step 4 Charting Mode Decision and Outputs
+
+- Classification input from Step 2: **Near-azeotropic**.
+- Applied protocol Case A (optional pseudo-pure saturation mode) in a separate diagnostic script:
+  `scripts/pseudopure_mode_eval.py` (keeps frozen reference module untouched).
+- Generated artifacts:
+  - `diagnostics/r515b_pseudopure_dome_20260303.csv`
+  - `diagnostics/r515b_pseudopure_vs_honeywell_20260303.png`
+  - `diagnostics/r515b_pseudopure_summary_20260303.json`
+- Quantitative deviation metrics (from summary JSON):
+  - initial run had `n_total=49`, `n_ok=42`, `n_failed=7`
+  - `MAE(T_mid vs Honeywell T) = 0.373356946118 K`
+  - `max |T_mid - T_honeywell| = 0.905506988922 K`
+  - fixed-pressure error metric in this mode is structurally `0` (pressure matched by construction at each row).
+- 2026-03-03: Bracketing refinement applied per user direction in `scripts/pseudopure_mode_eval.py`:
+  - first-pass windows in mass-density space:
+    vapor `0.001..50 kg/m^3`, liquid `50..max(1500, 3*max(rhoc)) kg/m^3`
+  - adaptive fallback full-range sweep (`1e-3..max(liq_hi, 2500) kg/m^3`) selecting first/last sign-change brackets.
+  Re-run result:
+  - `n_ok=49`, `n_failed=0` (all prior 7 `FAILED_NO_RHO_BRACKET` points at `2200..2500 kPa` resolved).
+  - 2400 kPa P(rho) diagnostic written to:
+    `diagnostics/pseudopure_prho_sweep_2400kPa_20260303.csv`.
+- 2026-03-03: Bug/fix standardization applied with shared utility:
+  “Bug: density bracketing bounds were set to ρ∈[0.001,2.0] kg/m³, which excludes liquid-like roots at multi-MPa pressures. Fix: unify density bracketer with vapor+liquid windows and adaptive upper bound based on critical density scale; apply to pseudo-pure dome and any true VLE routines that bracket densities.”
+  Implementation:
+  - shared utility module: `density_bracketing.py`
+  - integrated in: `scripts/pseudopure_mode_eval.py` and `pressure_validated_model.py`
+  Defaults now explicit in mass-density units:
+  - `rho_min = 1e-4 kg/m^3`
+  - `rho_split = 50 kg/m^3`
+  - `rho_max = min(2000, 3*max(rhoc_i)) kg/m^3`
+  Failure logging now includes final bounds via `format_bounds_log(...)` at bracket failures.
+- 2026-03-03: Generated updated Honeywell-vs-model comparison figure from tuned full-49 branch results:
+  `diagnostics/honeywell_vs_model_comparison_tuned_full49_20260303.png`.
+- 2026-03-03: Regenerated saturation dome after comparison-review approval using current tuned branch profiles and in-module β-band plotting:
+  - `verification/r515b_true_vle_bubble_dome_regen_20260303.csv`
+  - `verification/r515b_true_vle_dew_dome_regen_20260303.csv`
+  - `verification/r515b_true_vle_envelope_regen_20260303.png`
+  - `verification/r515b_true_vle_dome_regen_metadata_20260303.json`
+  Convergence: bubble `200/200`, dew `200/200`.
+- 2026-03-03: Generated clipped-domain P-h view from regenerated dome with axis limits requested for review:
+  `h = 150..500 kJ/kg`, `P = 1..100 bar`.
+  Output: `verification/r515b_true_vle_envelope_regen_20260303_h150_500_p1_100.png`.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 0 executed.
+  Created plotting driver scaffold module: `plot_ph_r515b_layers.py`.
+  Artifacts:
+  - `diagnostics/plots/ph_layer0_scaffold_20260303.png`
+  - `diagnostics/plots/ph_layer_status_20260303.json`
+  Status JSON records `completed_layers=[0]`, `inputs_used=[]`.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 1 executed.
+  Honeywell reference data available in current repo is PT-only (no direct Honeywell enthalpy points).
+  Artifacts:
+  - `diagnostics/plots/ph_layer1_honeywell_reference_20260303.png` (PT reference plot)
+  - `diagnostics/plots/ph_layer1_inputs_20260303.csv` (exact columns: `T_C`, `P_ref_kPa`)
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1]`.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 2 executed (true VLE boundaries only; no new solves).
+  Inputs:
+  - `verification/r515b_true_vle_bubble_dome_regen_20260303.csv`
+  - `verification/r515b_true_vle_dew_dome_regen_20260303.csv`
+  - `verification/r515b_true_vle_dome_regen_metadata_20260303.json`
+  Artifacts:
+  - `diagnostics/plots/ph_layer2_true_vle_boundary_20260303.png`
+  - `diagnostics/plots/ph_layer2_true_vle_boundary_20260303.csv`
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1,2]`.
+  Boundary checks on aligned points (`n=200`):
+  - crossings (`h_dew < h_bubble`): `0`
+  - minimum enthalpy separation: `18.621116283849 kJ/kg`
+  - maximum enthalpy separation: `30.418098616050 kJ/kg`
+  - missing/gap indicators in branch T arrays: `0` for bubble, `0` for dew.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 3 executed (β-band fill from conjugate pairs).
+  Artifacts:
+  - `diagnostics/plots/ph_layer3_true_vle_beta_band_20260303.png`
+  - `diagnostics/plots/ph_layer3_beta_grid_20260303.csv`
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1,2,3]`.
+  Implementation notes:
+  - β levels used: `0.0, 0.1, ..., 1.0`
+  - per pair, `h(beta)=(1-beta)h_l+beta h_v`, `P(beta)=P_pair` (horizontal tie-lines)
+  - geometric validity check: `invalid_pairs(h_dew < h_bubble)=0`, `min_h_span=18.621116283849 kJ/kg`.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 4 executed.
+  Chosen family: **Isotherms** (Option A, first-pass context lines).
+  Artifacts:
+  - `diagnostics/plots/ph_layer4_isotherms_20260303.png`
+  - `diagnostics/plots/ph_layer4_isotherms_20260303.csv`
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1,2,3,4]`.
+  Construction details:
+  - temperature set [C]: `[-19, -5, 10, 25, 40, 55, 70, 85]`
+  - vapor-like density window: `0.001..40 kg/m^3`
+  - liquid-like density window: `120..2000 kg/m^3`
+  - solved points: `2240 OK`, `0 FAILED`
+  Two-phase artifact control:
+  - no flash was invoked in this layer;
+  - curves were generated only from separated vapor-like / liquid-like density windows for context overlays.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 5 executed (optional pseudo-pure overlay).
+  Artifacts:
+  - `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.png`
+  - `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv`
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1,2,3,4,5]`.
+  Status summary:
+  - pseudo-pure points `OK=49`, `FAILED=0` (status codes included in CSV).
+  - pseudo-pure dotted overlay tracks near-azeotropic datasheet-style boundary context over the solved range.
+- 2026-03-03: Step-5 pseudo-pure liquid-branch jump discontinuity diagnosed (for ongoing work with TARS).
+  Observation from `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv`:
+  - largest liquid enthalpy drop occurs between `900 -> 950 kPa`:
+    `h_l: 356.846010 -> 267.713337 kJ/kg` (`Δh_l = -89.132673 kJ/kg`).
+  Root-selection evidence from `diagnostics/r515b_pseudopure_dome_20260303.csv`:
+  - at `<=900 kPa`: `bracket_note=WINDOW_OK`, `rho_l ~ 1708..1731 mol/m^3`
+  - at `>=950 kPa`: `bracket_note=FALLBACK_FIRST_LAST_SIGN_CHANGE`, `rho_l ~ 9159..8961 mol/m^3`
+  Interpretation:
+  - discontinuity is caused by liquid-root branch switching during fallback bracketing,
+    not by EOS parameter changes.
+  Next numeric-only direction (no science edit):
+  - apply branch-continuity root selection (prefer liquid root nearest previous
+    liquid state in `rho_l`/`h_l`) when multiple sign-change candidates exist.
+- 2026-03-03: STEP 5.1 instrumentation completed in `scripts/pseudopure_mode_eval.py` (no root-selection behavior change).
+  Added full candidate logging for all sign-change brackets in both windows per pressure:
+  - `diagnostics/pseudopure_root_candidates_20260303.csv`
+  Fields include:
+  - `rho_bracket_lo`, `rho_bracket_hi`, `rho_root`, `h_root_kJkg`, `root_rank`, `phase_window`, `root_status`
+  Candidate-count check (problematic region):
+  - `900 kPa`: vapor candidates `1`, liquid candidates `4`
+  - `950 kPa`: vapor candidates `0`, liquid candidates `5`
+  - `1000 kPa`: vapor candidates `0`, liquid candidates `5`
+  Confirmation:
+  - multiple liquid roots exist in this pressure range; current jump is consistent with branch-selection ambiguity.
+- 2026-03-03: STEP 5.2 continuity selector implemented in `scripts/pseudopure_mode_eval.py` (numerical-only selection logic).
+  Selection rule:
+  - if previous liquid state exists, select liquid root minimizing `|rho_l-rho_l_prev|`
+  - first accepted point keeps standard liquid-window bracket root (fallback to highest-density liquid candidate only if no bracket-match candidate is found).
+  Guardrail:
+  - if `|h_l-h_l_prev| > 20 kJ/kg`, emit warning and reference candidate CSV.
+  Re-run outcome (`diagnostics/r515b_pseudopure_dome_20260303.csv`):
+  - liquid-side jump discontinuity in 900–1000 kPa region removed.
+  - previous jump (`900->950 kPa: -89.13 kJ/kg`) replaced by smooth progression:
+    `h_l(900)=356.846`, `h_l(950)=358.118`, `h_l(1000)=359.245 kJ/kg`.
+  - largest remaining adjacent liquid-step magnitude across curve: `5.981 kJ/kg`.
+  - jump warnings emitted: `0`.
+- 2026-03-03: STEP 5.3 completed in `scripts/pseudopure_mode_eval.py`.
+  Fallback policy update:
+  - fallback remains bracket-discovery only (`bracket_note` retained for diagnostics)
+  - root selection is continuity-driven over explicit full-grid root candidates
+    (`vapor = lowest-density root`, `liquid = continuity-selected from remaining roots`).
+  Re-run results:
+  - `diagnostics/r515b_pseudopure_dome_20260303.csv`: `OK=49`, `FAILED=0`
+  - `diagnostics/r515b_pseudopure_vs_honeywell_20260303.png` regenerated
+  - `diagnostics/pseudopure_root_candidates_20260303.csv` regenerated
+  Continuity checks:
+  - 900/950/1000 kPa liquid branch remains continuous after selection:
+    `h_l = 264.688, 267.713, 270.642 kJ/kg`
+  - maximum adjacent `|Δh_l|` across run: `12.269 kJ/kg` (below `20 kJ/kg` guardrail)
+  - jump warnings emitted: `0`.
+- 2026-03-03: Layer-by-layer plotting protocol STEP 6 executed (final Honeywell-style composite).
+  Code update:
+  - `plot_ph_r515b_layers.py` enhanced with `--step 6` composite builder.
+  Artifacts:
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`
+  - `diagnostics/plots/ph_layer6_manifest_20260303.json`
+  - `diagnostics/plots/ph_layer_status_20260303.json` updated to `completed_layers=[0,1,2,3,4,5,6]`
+  STEP-6 visualization settings:
+  - pressure axis: log scale
+  - plot window: `h=150..500 kJ/kg`, `P=1..100 bar`
+  - legend entries:
+    `True VLE bubble (liq)`, `True VLE dew (vap)`,
+    `Two-phase beta-band`, `Isotherms`,
+    `Pseudo-pure overlay (datasheet mode)`.
+  Manifest records short git hash `af2ae3d` and exact input CSV dependencies.
+- 2026-03-03: Corrected STEP-6 pseudo-pure overlay input chain to use continuity-fixed pseudo-pure data.
+  Issue:
+  - STEP-6 initially consumed stale `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv`
+    generated before continuity selector updates, which retained a visible liquid-side jump.
+  Action:
+  - refreshed `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv` and
+    `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.png` from
+    `diagnostics/r515b_pseudopure_dome_20260303.csv` (continuity-fixed source),
+  - regenerated STEP-6 outputs:
+    `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`,
+    `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`,
+    `diagnostics/plots/ph_layer6_manifest_20260303.json`.
+  Verification:
+  - updated Layer-5 plotting CSV now has `max adjacent |Δh_l| = 12.269 kJ/kg`,
+    and `h_l(900,950,1000 kPa) = 264.688, 267.713, 270.642 kJ/kg`.
+- 2026-03-03: Isotherm crossover diagnostics protocol — DIAG STEP 1 completed (reproducibility/provenance export).
+  Source inputs:
+  - `diagnostics/plots/ph_layer4_isotherms_20260303.csv`
+  - `diagnostics/plots/ph_layer2_true_vle_boundary_20260303.csv`
+  Output files (one per isotherm):
+  - `diagnostics/isotherms/T_m19p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_m5p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_10p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_25p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_40p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_55p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_70p0C_raw_points_20260303.csv`
+  - `diagnostics/isotherms/T_85p0C_raw_points_20260303.csv`
+  Exported fields include:
+  - `T_K`, `rho_basis`, `rho_value`, `P_kPa`, `h_kJkg`, `phase_tag_guess`,
+    `Z`, `status`, `hb_interp_kJkg`, `hd_interp_kJkg`, `inside_2phase_flag`.
+  Counts per isotherm (`n_total`, `n_OK`, `n_flagged_2phase`):
+  - `-19 C`: `280`, `280`, `0`
+  - `-5 C`: `280`, `280`, `0`
+  - `10 C`: `280`, `280`, `2`
+  - `25 C`: `280`, `280`, `5`
+  - `40 C`: `280`, `280`, `9`
+  - `55 C`: `280`, `280`, `14`
+  - `70 C`: `280`, `280`, `20`
+  - `85 C`: `280`, `280`, `4`
+  Two-phase interpolation overlap window used:
+  - `P in [5.902676, 23.206615] bar`.
+- 2026-03-03: Isotherm crossover diagnostics protocol — STEP D1 completed (raw vs filtered overlays).
+  Generated per-isotherm artifacts:
+  - `diagnostics/isotherms/plots/T_-19C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_-5C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_10C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_25C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_40C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_55C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_70C_raw_vs_filtered_20260303.png`
+  - `diagnostics/isotherms/plots/T_85C_raw_vs_filtered_20260303.png`
+  plus flagged-point CSVs:
+  - `diagnostics/isotherms/T_<Tc>_points_with_flags_20260303.csv` for each listed temperature.
+  Summary file:
+  - `diagnostics/isotherms/isotherm_d1_summary_20260303.csv`
+  Focus-isotherm metrics (`n_total`, `n_flagged_2phase`):
+  - `40 C`: `280`, `9`
+  - `55 C`: `280`, `14`
+  - `70 C`: `280`, `20`
+  Observation from D1:
+  - filtering `inside_2phase_flag=True` points alone did **not** remove loop behavior in order-connected polylines,
+    indicating ordering/branch-mixing effects remain and D2 boundary-stop alone may be insufficient.
+- 2026-03-03: Isotherm crossover diagnostics protocol — STEP D3.1 completed (ordering vs branch-mixing).
+  Focus temperatures: `40 C`, `55 C`, `70 C`.
+  For each isotherm (filtered to `inside_2phase_flag=False`), generated:
+  - A: current-order polyline:
+    `diagnostics/isotherms/plots/T_<Tc>_polyline_current_order_20260303.png`
+  - B: enthalpy-sorted polyline:
+    `diagnostics/isotherms/plots/T_<Tc>_polyline_h_sorted_20260303.png`
+  - C: branch-split (`rho_split = median(rho_filtered)`) and each branch h-sorted:
+    `diagnostics/isotherms/plots/T_<Tc>_polyline_branch_split_20260303.png`
+  Summary CSV:
+  - `diagnostics/isotherms/isotherm_d31_summary_20260303.csv`
+  Results:
+  - `40 C`: `rho_split=29.486730`, branch counts `(vapor=135, liquid=136)`,
+    loops: `A=True`, `B=False`, `C=False`.
+  - `55 C`: `rho_split=24.387718`, branch counts `(vapor=133, liquid=133)`,
+    loops: `A=True`, `B=False`, `C=False`.
+  - `70 C`: `rho_split=19.401984`, branch counts `(vapor=130, liquid=130)`,
+    loops: `A=True`, `B=False`, `C=False`.
+  Interpretation:
+  - current isotherm crossover issue is polyline parameterization/order driven.
+  - both h-sorting and branch-split+h-sorting remove loops in tested focus temperatures.
+- 2026-03-03: Isotherm crossover diagnostics protocol — STEP D4 (70 C only, pre-plot stability filter check) completed.
+  Input:
+  - `diagnostics/isotherms/T_70C_filtered_OK_only_20260303.csv`
+  Method:
+  - computed numerical `dP/drho` per point using symmetric perturbation on rho-sorted `(rho, P)` data
+  - set `mechanically_stable = (dPdrho > 0)`
+  Output:
+  - `diagnostics/isotherms/T_70C_filtered_OK_only_with_stability_20260303.csv`
+  Counts (before plotting):
+  - total points: `260`
+  - mechanically stable: `194`
+  - mechanically unstable: `66`
+  Branch breakdown (`rho_split=1.4142135623730951 kg/m^3`):
+  - vapor-like: stable `87`, unstable `9`
+  - liquid-like: stable `107`, unstable `57`
+- 2026-03-03: Isotherm crossover diagnostics protocol — STEP D4 plotting (70 C stable-only) completed.
+  Stable-only branch-split artifacts:
+  - `diagnostics/isotherms/T_70C_branch_split_stable_only_20260303.csv`
+  - `diagnostics/isotherms/plots/T_70C_branch_split_polyline_stable_only_20260303.png`
+  Outcome:
+  - vertical spikes: removed
+  - remaining loops in vapor-like branch: none
+  - remaining loops in liquid-like branch: none
+  Stable branch counts:
+  - vapor-like `87`
+  - liquid-like `107`
+- 2026-03-03 — Mechanical Stability Filter Added for Isotherms
+
+- Implemented filter: retain only states where `(∂P/∂ρ)_T > 0`
+- Purpose: remove spinodal/unstable states from single-phase isotherm plots
+- No changes to EOS or thermodynamic formulation
+- References: Callen; Smith, Van Ness & Abbott; Prausnitz et al.
+- 2026-03-03: Final isotherm plotting protocol (F1-F5) executed for `T=70 C` with rho-parameterized piecewise branch logic.
+  Inputs:
+  - `diagnostics/isotherms/T_70C_filtered_OK_only_with_stability_20260303.csv`
+  Rules applied:
+  - no enthalpy sorting
+  - filter: `inside_2phase_flag=False`, `status=OK`, `mechanically_stable=True`
+  - fixed split `rho_split=1.4142135623730951 kg/m^3`
+  - piecewise segmentation in original `plot_idx` order when `sign(Δh)` flips
+  Output:
+  - `diagnostics/isotherms/plots/T_70C_final_stable_rho_parametrized_20260303.png`
+  Counts:
+  - filtered stable points: `194` (`vapor=87`, `liquid=107`)
+  - vapor segments: `1`
+  - liquid segments: `5`
+  Reported checks:
+  - vertical spikes gone: `No`
+  - vapor branch smooth: `Yes`
+  - liquid branch smooth: `Yes`
+- 2026-03-03: Implemented block-based stable rho-parameterized isotherm plotting utility (plotting-only, no EOS edits).
+  New module:
+  - `scripts/plot_isotherms_stable_blocks.py`
+  Algorithm implemented:
+  - `rho_grid = logspace(1e-3, 1200, 800)`
+  - evaluate `P(T,rho,z)`, `h(T,rho,z)`, numerical `dPdrho`
+  - strict stability mask `dPdrho > 1e-6`, with automatic retry at `1e-5` when `n_blocks > 2`
+  - contiguous stable-block segmentation over rho-grid indices
+  - branch choice: lowest-density block as vapor, highest-density block as liquid
+  - no enthalpy sorting, no cross-gap stitching, separate branch plotting
+  - monotonicity assertions on branch pressure sequences.
+  70 C run artifacts:
+  - `diagnostics/isotherms/plots/T_70C_final_stable_block_rho_parametrized_20260303.png`
+  - `diagnostics/isotherms/stable_block_segmentation_summary_20260303.csv`
+  - `diagnostics/isotherms/stable_block_segmentation_summary_20260303.json`
+  70 C diagnostics:
+  - stable blocks: `3` (tolerance raised to `1e-5` per protocol)
+  - vertical segments disappear: `True`
+  - monotonicity assertions pass: `True`
+- 2026-03-03: Updated stable-block isotherm branch identification to recover true vapor basin and endpoint-consistent labeling (plotting-only).
+  File updated:
+  - `scripts/plot_isotherms_stable_blocks.py`
+  Numerical/labeling changes (no physics edits):
+  - soft stability gate: `stable_mask = dPdrho > -tol_soft`, `tol_soft=1e-4` (auto-tighten to `1e-5` when block count > 2)
+  - monotonic pressure block-pruning with jitter allowance `min(diff(P_block)) >= -P_tol`, `P_tol=1e-3*max(P_block)`
+  - branch labeling by VLE endpoint proximity in scaled `(P,h)` coordinates (dew for vapor high-P endpoint, bubble for liquid low-P endpoint)
+  - branch endpoint trimming to nearest VLE endpoint (rho-order, no h-sorting)
+  - mandatory per-isotherm diagnostic print line implemented.
+  70 C rerun diagnostics (post-trim endpoints):
+  - `rho_grid_min=0.001`, `rho_vapor_candidate_min=0.001`
+  - stable blocks before/after pruning: `3 / 3`
+  - vapor endpoint vs dew: `(1650.81 kPa, 432.351 kJ/kg)` vs `(1616.81 kPa, 418.657 kJ/kg)`, distance `0.138543`
+  - liquid endpoint vs bubble: `(3132.18 kPa, 395.255 kJ/kg)` vs `(2032.27 kPa, 396.131 kJ/kg)`, distance `0.541291`
+  Acceptance checks:
+  - vertical segments disappear: `True`
+  - monotonicity assertions pass: `True`
+- 2026-03-03: Docstring-only thermodynamic reference update for isotherm stabilization logic.
+  Updated file:
+  - `scripts/plot_isotherms_stable_blocks.py`
+  Scope:
+  - documentation only (no numerical or physics behavior changes)
+  - added structured docstrings for isotherm sweep, stability filtering, spinodal screening,
+    block segmentation, branch labeling, and plotting CLI
+  - added explicit thermodynamic basis and mathematical conditions including
+    `(∂P/∂ρ)_T` criteria
+  - added required literature references (Span 2000; Callen 1985; Prausnitz et al. 1999;
+    Lemmon et al. 2018; Bell & Lemmon mixture EOS literature)
+  Compliance note:
+  - EOS, mixing rules, departure terms, fugacity, and VLE solver logic unchanged.
+- 2026-03-03: Reverted the large thermodynamic-reference docstring expansion in
+  `scripts/plot_isotherms_stable_blocks.py` per user request.
+  Scope:
+  - documentation text reduced to concise docstrings only
+  - no numerical or plotting behavior changes.
+
+## 2026-03-03 — Layer Memory (P-h Build Protocol Snapshot)
+
+- Layer 0 — Scaffold only
+  - Purpose: initialize axes/plot status scaffolding.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer0_scaffold_20260303.png`
+    - `diagnostics/plots/ph_layer_status_20260303.json`
+
+- Layer 1 — Honeywell reference anchor
+  - Purpose: reference input sanity anchor from available Honeywell PT data in repo.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer1_honeywell_reference_20260303.png`
+    - `diagnostics/plots/ph_layer1_inputs_20260303.csv`
+  - Note: current in-repo Honeywell input used here is PT-only.
+
+- Layer 2 — True VLE boundaries
+  - Purpose: plot bubble and dew branch boundaries from true-VLE outputs.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer2_true_vle_boundary_20260303.png`
+    - `diagnostics/plots/ph_layer2_true_vle_boundary_20260303.csv`
+
+- Layer 3 — Two-phase beta band
+  - Purpose: fill/interpolate interior two-phase region using beta parameterization.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer3_true_vle_beta_band_20260303.png`
+    - `diagnostics/plots/ph_layer3_beta_grid_20260303.csv`
+
+- Layer 4 — Isotherm context overlays
+  - Status: removed from layered pipeline.
+  - Reason: scrapped rho-sweep isotherm overlay layer to eliminate
+    metastable/two-phase interior tracing artifacts in final layered plot.
+  - Artifacts: deleted (`ph_layer4_isotherms_*` removed).
+
+- Layer 5 — Pseudo-pure overlay
+  - Purpose: optional near-azeotropic/datasheet-style pseudo-pure overlay.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.png`
+    - `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv`
+  - Current source alignment: regenerated from continuity-fixed
+    `diagnostics/r515b_pseudopure_dome_20260303.csv`.
+
+- Layer 6 — Final composite (Honeywell-style)
+  - Purpose: combine Layers 2–5 with presentation settings.
+  - Artifacts:
+    - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`
+    - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`
+    - `diagnostics/plots/ph_layer6_manifest_20260303.json`
+  - Isotherm overlay excluded (no isotherm legend entry, no Layer-4 dependency).
+
+- Layer 7 — Isentropes (planned, not yet implemented)
+  - Purpose: add constant-entropy guide curves for chart interpretation.
+  - Status: planned only; no Layer-7 artifacts generated yet in `diagnostics/plots/`.
+  - Next expected artifacts (when implemented):
+    - `diagnostics/plots/ph_layer7_isentropes_<date>.png`
+    - `diagnostics/plots/ph_layer7_isentropes_<date>.csv`
+
+- Layer 8 — Isochors (planned, not yet implemented)
+  - Purpose: add constant-density guide curves for chart interpretation.
+  - Status: planned only; no Layer-8 artifacts generated yet in `diagnostics/plots/`.
+  - Next expected artifacts (when implemented):
+    - `diagnostics/plots/ph_layer8_isochors_<date>.png`
+    - `diagnostics/plots/ph_layer8_isochors_<date>.csv`
+
+## 2026-03-03 — Isotherm Layer Removal + REFPROP-Style Replacement
+
+- Removed from layered pipeline:
+  - isotherm overlay logic in `plot_ph_r515b_layers.py` (Layer-6 no longer reads Layer-4 CSV)
+  - isotherm-only helper functions tied to layered overlay
+  - old rho-parameterized isotherm helper module: `scripts/plot_isotherms_stable_blocks.py` deleted
+- Deleted isotherm-layer artifacts:
+  - `diagnostics/plots/ph_layer4_isotherms_20260303.csv`
+  - `diagnostics/plots/ph_layer4_isotherms_20260303.png`
+  - prior `diagnostics/isotherms/` diagnostic folder removed
+- Regenerated Layer-6 outputs (without isotherm legend entries):
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`
+  - `diagnostics/plots/ph_layer6_manifest_20260303.json`
+  - `diagnostics/plots/ph_layer_status_20260303.json`
+
+- Added standalone REFPROP-style isotherm algorithm module:
+  - `scripts/plot_refprop_style_isotherm.py`
+  - Algorithm:
+    - single-phase vapor branch from low-density root over `P in [Pmin, Pdew(T)-eps]`
+    - single-phase liquid branch from high-density root over `P in [Pbub(T)+eps, Pmax]`
+    - straight two-phase connector between `(h_bub, P_bub)` and `(h_dew, P_dew)`
+    - no interior two-phase rho-sweep points plotted.
+  - References embedded in docstrings:
+    - NIST REFPROP docs (v10, 2018)
+    - REFPROP-docs metastable notes
+    - EES/REFPROP straight-line connector plotting convention
+    - Span (2000), Bell et al. (2014)
+
+- Generated 70 C REFPROP-style deliverables:
+  - figure: `diagnostics/isotherms_refprop_style/T_70C_REFPROP_style_isotherm.png`
+  - csv: `diagnostics/isotherms_refprop_style/T_70C_REFPROP_style_isotherm.csv`
+    with columns `[P_bar, h_kJkg, phase_flag]`, `phase_flag ∈ {vapor, two_phase_connector, liquid}`.
+- Printed diagnostics:
+  - `P_bub(70 C)=20.322731 bar`, `h_bub=396.130635 kJ/kg`
+  - `P_dew(70 C)=16.168085 bar`, `h_dew=418.657380 kJ/kg`
+  - vapor points: `80`, liquid points: `80`
+- 2026-03-03: Debug overlay run executed for dome + REFPROP-style isotherm at `70 C` only.
+  Command scope:
+  - `scripts/overlay_refprop_isotherms_on_dome.py --temps-c=70 --nv 30 --nl 30`
+  Artifacts:
+  - `diagnostics/plots/ph_dome_with_refprop_style_isotherms_20260303.png`
+  - `diagnostics/plots/ph_dome_with_refprop_style_isotherms_20260303.csv`
+  Note:
+  - This specific run is single-temperature (70 C) for debugging speed.
+
+## 2026-03-03 — Pseudo-Pure Iso-Diagram Switch (Honeywell-Style)
+
+- Scope honored:
+  - no EOS/mixing/departure/fugacity/VLE solver edits
+  - plotting/overlay logic only.
+
+- Layer-6 plotting logic switched to pseudo-pure saturation representation:
+  - file updated: `plot_ph_r515b_layers.py`
+  - removed true-VLE boundary dependence for Layer-6 rendering
+  - Layer-6 now uses:
+    - pseudo-pure saturation boundaries from `diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv`
+    - two-phase fill between `h_f(T)` and `h_g(T)` at `P_sat(T)`
+    - quality lines `x=0.1..0.9`
+  - chart window set to `1..35 bar`.
+  - updated Layer-6 legend:
+    - `Sat. liquid boundary`
+    - `Sat. vapor boundary`
+    - `Two-phase region`
+    - `Quality lines x=0.1..0.9`
+
+- Old isotherm attempt artifacts removed:
+  - `diagnostics/isotherms_refprop_style/` (deleted)
+  - `diagnostics/plots/ph_dome_with_refprop_style_isotherms_20260303.png` (deleted)
+  - `diagnostics/plots/ph_dome_with_refprop_style_isotherms_20260303.csv` (deleted)
+
+- Added pseudo-pure overlay generator:
+  - `scripts/plot_pseudopure_isodiagram.py`
+  - outputs:
+    - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+    - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
+  - `phase_flag` values: `{vapor, two_phase_connector, liquid}`.
+
+- 70 C validation prints from pseudo-pure logic:
+  - `P_sat(70 C)=16.169297312 bar`
+  - `h_f(70 C)=301.269002697 kJ/kg`
+  - `h_g(70 C)=418.655032863 kJ/kg`
+  - vapor segment `P_max=16.159297311 bar` (target `P_sat-eps=16.159297312`)
+  - liquid segment `P_min=16.179297274 bar` (target `P_sat+eps=16.179297312`)
+  - connector pressure `=16.169297312 bar` (exact `P_sat`).
+
+- Regenerated Layer-6 pseudo-pure outputs:
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`
+  - `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`
+  - `diagnostics/plots/ph_layer6_manifest_20260303.json`

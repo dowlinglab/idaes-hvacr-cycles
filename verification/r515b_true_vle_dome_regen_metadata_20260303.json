@@ -1,0 +1,36 @@
+{
+  "generated_at_utc": "2026-03-03T22:02:34.000300+00:00",
+  "fluid1": "r1234ze",
+  "fluid2": "r227ea",
+  "w1_kgkg": 0.911,
+  "x1_molmol": 0.9385037942295681,
+  "Tmin_K": 250.0,
+  "Tmax_K": 360.0,
+  "n_points": 200,
+  "mw_mix_kgmol": 0.11748460406148269,
+  "bubble_profile": {
+    "method": "trf",
+    "diff_step": 1e-06,
+    "max_nfev": 800,
+    "x_scale": 1.0,
+    "ftol": 1e-14,
+    "xtol": 1e-14,
+    "gtol": 1e-14,
+    "loss": "cauchy",
+    "f_scale": 10.0
+  },
+  "dew_profile": {
+    "method": "trf",
+    "diff_step": 1e-08,
+    "max_nfev": 800,
+    "x_scale": 2.0,
+    "ftol": 1e-10,
+    "xtol": 1e-10,
+    "gtol": 1e-10,
+    "loss": "huber",
+    "f_scale": 3.0
+  },
+  "bubble_converged": 200,
+  "dew_converged": 200,
+  "figure": "verification/r515b_true_vle_envelope_regen_20260303.png"
+}

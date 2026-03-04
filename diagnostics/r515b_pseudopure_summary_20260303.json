@@ -1,0 +1,13 @@
+{
+  "n_total": 49,
+  "n_ok": 49,
+  "n_failed": 0,
+  "mae_Tmid_vs_honeywell_K": 0.3733569461181004,
+  "max_abs_Tmid_vs_honeywell_K": 0.905506988922042,
+  "pseudo_mode_pressure_error_metric_pct": 0.0,
+  "csv": "diagnostics/r515b_pseudopure_dome_20260303.csv",
+  "candidates_csv": "diagnostics/pseudopure_root_candidates_20260303.csv",
+  "plot": "diagnostics/r515b_pseudopure_vs_honeywell_20260303.png",
+  "prho_sweep_2400kPa_csv": "diagnostics/pseudopure_prho_sweep_2400kPa_20260303.csv",
+  "prho_sweep_T_mid_K": 361.63911178072175
+}
