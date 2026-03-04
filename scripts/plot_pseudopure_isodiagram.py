@@ -584,6 +584,80 @@ def _trace_branch_with_continuation(
     }
 
 
+def _compute_dome_cap_from_saturation(p_bar: np.ndarray, h_f: np.ndarray, h_g: np.ndarray, n_fit: int = 8) -> Optional[Dict[str, float]]:
+    """
+    Compute a cap point by extrapolating the saturation-gap collapse trend.
+
+    Thermodynamic basis
+    -------------------
+    At the critical closure of a pseudo-pure dome, h_g - h_f -> 0.
+    We estimate the closure pressure by fitting Delta h(P) near the highest
+    available saturation pressures and solving Delta h = 0.
+
+    Inputs
+    ------
+    p_bar : np.ndarray [bar]
+    h_f : np.ndarray [kJ/kg]
+    h_g : np.ndarray [kJ/kg]
+    n_fit : int [-]
+        Number of highest-pressure points used in linear fit.
+
+    Outputs
+    -------
+    Optional[Dict[str,float]]
+        {"p_cap_bar","h_cap_kJkg","h_f_cap_kJkg","h_g_cap_kJkg"} or None if fit invalid.
+
+    Assumptions
+    -----------
+    - Top-of-range saturation points are in the near-closure trend region.
+
+    Failure modes
+    -------------
+    - If Delta h trend is not monotone enough, extrapolated closure is unreliable.
+    - Returns None if fit slope/intersection are invalid.
+
+    References
+    ----------
+    - Critical closure condition for phase envelope: coexisting phase properties merge.
+
+    Notes on numerical stability
+    ----------------------------
+    - Uses only top pressure window to reduce low-pressure bias in extrapolation.
+    """
+    if len(p_bar) < 4:
+        return None
+    order = np.argsort(p_bar)
+    p = np.asarray(p_bar, dtype=float)[order]
+    hf = np.asarray(h_f, dtype=float)[order]
+    hg = np.asarray(h_g, dtype=float)[order]
+    n = min(int(n_fit), len(p))
+    p_top = p[-n:]
+    hf_top = hf[-n:]
+    hg_top = hg[-n:]
+    dh_top = hg_top - hf_top
+    if not np.all(np.isfinite(dh_top)) or np.nanmin(dh_top) <= 0.0:
+        return None
+    m_dh, b_dh = np.polyfit(p_top, dh_top, 1)
+    if not np.isfinite(m_dh) or abs(m_dh) < 1e-12 or m_dh >= 0.0:
+        return None
+    p_cap = -b_dh / m_dh
+    if not np.isfinite(p_cap) or p_cap <= p_top[-1]:
+        return None
+    m_hf, b_hf = np.polyfit(p_top, hf_top, 1)
+    m_hg, b_hg = np.polyfit(p_top, hg_top, 1)
+    hf_cap = m_hf * p_cap + b_hf
+    hg_cap = m_hg * p_cap + b_hg
+    h_cap = 0.5 * (hf_cap + hg_cap)
+    if not (np.isfinite(h_cap) and np.isfinite(hf_cap) and np.isfinite(hg_cap)):
+        return None
+    return {
+        "p_cap_bar": float(p_cap),
+        "h_cap_kJkg": float(h_cap),
+        "h_f_cap_kJkg": float(hf_cap),
+        "h_g_cap_kJkg": float(hg_cap),
+    }
+
+
 def build_pseudopure_isotherm_segments(
     sat_df: pd.DataFrame,
     T_C: float,
@@ -747,6 +821,23 @@ def main() -> None:
     ax.fill_betweenx(pbar, hf, hg, color="#f4d35e", alpha=0.18, label="Two-phase region")
     ax.plot(hf, pbar, color="#0b4f6c", lw=2.0, label="Sat. liquid boundary")
     ax.plot(hg, pbar, color="#c44536", lw=2.0, label="Sat. vapor boundary")
+    # Computed cap from saturation trend extrapolation (Delta h -> 0).
+    cap = _compute_dome_cap_from_saturation(pbar, hf, hg, n_fit=8)
+    if cap is not None and cap["p_cap_bar"] <= float(args.Pmax_bar):
+        i_top = int(np.argmax(pbar))
+        ax.plot(
+            [hf[i_top], cap["h_cap_kJkg"]],
+            [pbar[i_top], cap["p_cap_bar"]],
+            color="#8d6e63",
+            lw=1.2,
+        )
+        ax.plot(
+            [hg[i_top], cap["h_cap_kJkg"]],
+            [pbar[i_top], cap["p_cap_bar"]],
+            color="#8d6e63",
+            lw=1.2,
+            label="Computed dome cap",
+        )
 
     # quality lines
     for q in np.arange(0.1, 1.0, 0.1):

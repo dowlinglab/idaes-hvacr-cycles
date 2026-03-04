@@ -1380,3 +1380,28 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   - `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`
   - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
   - `diagnostics/pseudopure_iso/T_70C_selection_trace_20260303.csv`
+
+## 2026-03-03 — Dome Cap Added (Visualization)
+
+- Updated `scripts/plot_pseudopure_isodiagram.py` to add an explicit cap line at
+  the highest available saturation pressure by connecting the corresponding
+  `h_f` and `h_g` endpoints.
+- Scope: plotting-only visual closure of dome top; no EOS/solver changes.
+- Regenerated artifact:
+  - `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`
+
+## 2026-03-03 — Dome Cap Converted to Computed Cap (No Visual Arc)
+
+- Removed the prior visual-only rounded cap in `scripts/plot_pseudopure_isodiagram.py`.
+- Added computed cap routine:
+  - `_compute_dome_cap_from_saturation(p_bar, h_f, h_g, n_fit=8)`
+  - Method: fit top-range `Delta h(P) = h_g - h_f` linearly and solve for
+    `Delta h = 0` to estimate closure pressure, then infer cap enthalpy.
+- Plot now closes dome top using two computed connector segments from the highest
+  available saturation endpoints to the computed cap point.
+
+- Current computed cap (from `diagnostics/r515b_pseudopure_dome_20260303.csv`):
+  - `p_cap_bar = 48.9219296004868`
+  - `h_cap_kJkg = 426.3612968931469`
+
+- Scope remains plotting-only; EOS and saturation-table generation unchanged.

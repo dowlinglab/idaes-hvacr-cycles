@@ -37,7 +37,7 @@ class SimpleVaporCompressionCyclePLR:
 
 
 
-    def __init__(self,fluid_name, compressor_efficiency=0.6, mode=Mode.IMPROVED_TPX, plr=0.75, cd=0.25):
+    def __init__(self,fluid_name, compressor_efficiency=0.75, mode=Mode.IMPROVED_TPX, plr=0.75, cd=0.25):
         ''' Simple Vapor Compression Cycle
 
         Parameters:
