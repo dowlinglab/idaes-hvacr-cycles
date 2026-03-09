@@ -1462,3 +1462,52 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - Documentation updates:
   - Module header updated with author/codex/QA breadcrumb template.
   - Detailed method docstrings added with governing math and intent.
+
+## Session Breadcrumb (2026-03-09)
+
+### Scope
+- Focus shifted to PLR-vs-base overlay reproducibility for cold-storage ambient sweeps.
+- User requested strict separation: keep `vapor_compression.py` unchanged and apply PLR in a copied model only.
+
+### Files Added/Updated
+- Added: `vapor_compression_plr_only.py` (copy of `vapor_compression.py` + PLR post-correction only).
+- Updated: `vapor_compression_plr.py` overwritten with `vapor_compression_plr_only.py` contents per user request.
+- Updated run scripts:
+  - `run_plr_cold_storage_r134a_copy.py`
+  - `run_plr_cold_storage_r1234zee_copy.py`
+
+### PLR Logic (Current)
+- Implemented as post-correction only:
+  - `PLF = 1 - CD * (1 - PLR)`
+  - `COP_part = PLF * COP_full`
+- Added guards:
+  - `PLR in [0, 1]`
+  - `CD in [0, 1]`
+- No soft/hard HX approach constraints in the active PLR model path.
+
+### Active Overlay Setup (Current)
+- Overlays now include 3 curves on same ambient grid:
+  - `Carnot COP`
+  - `vapor_compression COP`
+  - `vapor_compression_plr COP`
+- Ambient grid: `10..45 C` in `5 C` steps.
+- Ambient coupling active in both base and PLR runs via hard condenser relation:
+  - `T_cond_sat = T_amb + condenser_approach`
+- Current `condenser_approach`: `20 C`.
+- Current evap outlet temperature bounds passed in runs:
+  - `(-55 C, -20 C)` (interpreted as `(Tsp-35, Tsp)` with `Tsp=-20 C`).
+- Pressure bounds used in overlays:
+  - R134a: low `(60,120) kPa`, high `(500,1000) kPa`
+  - R1234ze: low `(40,80) kPa`, high `(350,800) kPa`
+
+### Latest Run Status
+- With current settings above:
+  - R134a overlay convergence: `8/8` for base and PLR
+  - R1234ze overlay convergence: `8/8` for base and PLR
+- Figure outputs:
+  - `cop_vs_ambient_plr_cold_storage_r134a_copy.png/.pdf/.csv`
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_copy.png/.pdf/.csv`
+
+### Notes For Next Session
+- User asked to potentially delete `vapor_compression_plr_only.py` after explicit confirmation.
+- If overlays look unexpectedly flat, first check whether condenser ambient coupling (`condenser_approach`) is being passed/activated.
