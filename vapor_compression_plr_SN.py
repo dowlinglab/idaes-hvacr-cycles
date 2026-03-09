@@ -1,25 +1,3 @@
-"""
-IDAES Vapor Compression Cycle with PLR and Soft-Approach Constraints
-
-Author: Shilpa Narasimhan
-Codex Support: OpenAI Codex (CASE)
-QA/Testing: Shilpa Narasimhan
-
-Description:
-    Defines an IDAES-PSE vapor-compression cycle model with COP optimization,
-    PLR/CD-based post-correction support, and optional soft constraints for
-    evaporator/condenser saturation-temperature approach bands.
-
-Context Breadcrumb:
-    This module is the PLR-specific working model used for cold-storage and
-    ambient-sweep studies where full-load COP is solved in IDAES and part-load
-    COP is computed via PLF post-processing.
-
-Notes:
-    - All QA and validation are the responsibility of Shilpa Narasimhan.
-    - This file was generated with Codex assistance.
-"""
-
 # Import required IDAES-PSE modules
 from idaes.core import FlowsheetBlock
 from idaes.models.properties.general_helmholtz import (
@@ -59,26 +37,16 @@ class SimpleVaporCompressionCyclePLR:
 
 
 
-    def __init__(self,fluid_name, compressor_efficiency=0.75, PLR = 0.5, CD = 0.25, mode=Mode.IMPROVED_TPX):
-        """Build a steady-state IDAES vapor-compression model with PLR metadata.
+    def __init__(self,fluid_name, compressor_efficiency=0.75, PLR = 1.0, CD = 0.0, mode=Mode.IMPROVED_TPX):
+        ''' Simple Vapor Compression Cycle
 
-        The thermodynamic cycle is solved at a normalized reference refrigerant
-        mass flow (1 kg/s). Part-load impact is applied as post-processing via
-        PLF (part-load factor), not by changing flow equations.
-
-        Parameters
-        ----------
-        fluid_name : str
-            Refrigerant identifier accepted by the IDAES Helmholtz package.
-        compressor_efficiency : float
-            Isentropic compressor efficiency, ``0 < eta_is < 1``.
-        PLR : float
-            Part-load ratio in ``[0, 1]``.
-        CD : float
-            Degradation coefficient, ``CD >= 0``.
-        mode : Mode
-            State-variable mode for unit/property equations.
-        """
+        Parameters:
+            fluid_name : str
+                Name of the fluid
+            compressor_efficiency : float
+                Isentropic efficiency of the compressor
+        
+        '''
 
         self.fluid_name = fluid_name
 
@@ -102,57 +70,18 @@ class SimpleVaporCompressionCyclePLR:
         
         # Save PLR and CD values supplied by the user
         
-        assert 0.0<= PLR <= 1.0, "PLR must be in [0,1]"
-        self.plr = PLR
-        
-        assert CD >= 0.0, "CD must be non-negative"
-        self.cd = CD
+        self.PLR = 1.0
         
         # Save the compressor efficiency
         assert 0 < compressor_efficiency < 1, "Compressor efficiency must be between 0 and 1"
         self.compressor_efficiency = compressor_efficiency
-        
-        self._last_cop_full = None
-        self._last_cop_part = None
-        self._last_plf = None
 
         self.optimization_converged = None
         
         self._define_flowsheet()
 
-    @staticmethod
-    def _compute_plf(plr: float, cd: float) -> float:
-        """Compute part-load factor from PLR and degradation coefficient.
-
-        Uses the linear correction:
-
-        ``PLF = 1 - CD * (1 - PLR)``
-
-        The return value is clamped to ``[0, 1]`` to avoid nonphysical COP
-        multipliers in reporting.
-        """
-        if not (0.0 <= plr <= 1.0):
-            raise ValueError("PLR must be in [0, 1]")
-        if cd < 0.0:
-            raise ValueError("CD must be non-negative")
-        plf = 1.0 - cd * (1.0 - plr)
-        return max(0.0, min(1.0, plf))
-
 
     def _define_flowsheet(self):
-        """Build the flowsheet, cycle constraints, and objective terms.
-
-        Core COP relationship is enforced as:
-
-        ``COP * W_comp = Q_evap``
-
-        Objective maximizes COP with soft-approach penalty:
-
-        ``maximize COP - w * (eps_e_low + eps_e_high + eps_c_low + eps_c_high)``
-
-        where each epsilon is a nonnegative slack (K) that relaxes approach
-        bands for evaporator/condenser saturation temperatures.
-        """
 
         # Set up logging
         logging.basicConfig(level=logging.WARNING)
@@ -191,22 +120,6 @@ class SimpleVaporCompressionCyclePLR:
         # self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
         # self.model.fs.expansion_valve_to_evaporator_expanded.pressure_equality.deactivate()
         # self.model.fs.expansion_valve_to_evaporator_expanded.temperature_equality.deactivate()
-        
-        # Adding slack variables for approach temperatures
-        self.model.fs.approach_min = Param(initialize = 8.0, mutable = True, units = pyunits.K)
-        self.model.fs.approach_max = Param(initialize = 10.0, mutable = True, units = pyunits.K)
-        self.model.fs.soft_approach_weight = Param(initialize = 0.02, mutable = True, units = 1/pyunits.K)
-        
-        # All other nonnegative slack variables
-        self.model.fs.eps_evap_low = Var(initialize = 0.0, bounds = (0,None), units = pyunits.K)
-        self.model.fs.eps_evap_high = Var(initialize = 0.0, bounds = (0,None), units = pyunits.K)
-        self.model.fs.eps_cond_low = Var(initialize = 0.0, bounds = (0,None), units = pyunits.K)
-        self.model.fs.eps_cond_high = Var(initialize = 0.0, bounds = (0,None), units = pyunits.K)
-        
-        # temperature references for approach definitions
-        self.model.fs.cold_storage_T = Param(initialize = C_to_K -20.0, mutable = True, units = pyunits.K)
-        self.model.fs.ambient_T_soft = Param(initialize = C_to_K + 20, mutable = True, units = pyunits.K)
-        
 
         # Set up the objective function
         '''
@@ -221,15 +134,10 @@ class SimpleVaporCompressionCyclePLR:
         
         @self.model.fs.Objective(doc="Maximize COP", sense=maximize)
         def obj(b):
-            penalty = b.soft_approach_weight*(b.eps_evap_low + b.eps_evap_high + b.eps_cond_low + b.eps_cond_high)
-            return b.cop-penalty
+            return b.cop
                                 
         self.model.fs.compute_cop.deactivate()
         self.model.fs.obj.deactivate()
-        
-        # Adding PLR and CD parameters
-        self.model.fs.plr = Param(initialize = self.plr, units = pyunits.dimensionless, mutable = True)
-        self.model.fs.cd = Param(initialize = self.cd, units = pyunits.dimensionless, mutable= True)
         
         self.model.fs.evaporator.superheating = Param(initialize=0, units=pyunits.K, mutable=True)
         self.model.fs.evaporator.T_sat_set = Param(initialize=C_to_K, units=pyunits.K, mutable=True)
@@ -314,24 +222,7 @@ class SimpleVaporCompressionCyclePLR:
         @self.model.fs.Constraint(doc="Valve inlet pressure equals P_high")
         def P_high_valve_in(b):
             return b.expansion_valve.inlet.pressure[0] == b.P_high
-        
-        @self.model.fs.Constraint(doc = "Evaporator approach lower (soft)")
-        def evap_approach_low(b):
-            return b.cold_storage_T - b.evaporator.control_volume.properties_out[0].temperature_sat>= b.approach_min-b.eps_evap_low
 
-        @self.model.fs.Constraint(doc = "Evaporator approach upper (soft)")
-        def evap_approach_up(b):
-            return b.cold_storage_T - b.evaporator.control_volume.properties_out[0].temperature_sat <= b.approach_max + b.eps_evap_high
-        
-        @self.model.fs.Constraint(doc = "Condenser approach lower (soft)")
-        def cond_approach_low(b):
-            return b.condenser.control_volume.properties_out[0].temperature_sat - b.ambient_T_soft >= b.approach_min - b.eps_cond_low
-        
-        @self.model.fs.Constraint(doc = "Condenser approach upper(soft)")
-        def cond_approach_up(b):
-            return b.condenser.control_volume.properties_out[0].temperature_sat - b.ambient_T_soft <= b.approach_max + b.eps_cond_high
-        
-        
         # Deactivate by default; activated in set_specifications when requested
         self.model.fs.P_low_target_constraint.deactivate()
         self.model.fs.P_high_target_constraint.deactivate()
@@ -343,11 +234,7 @@ class SimpleVaporCompressionCyclePLR:
         self.model.fs.P_high_cond_in.deactivate()
         self.model.fs.P_high_cond_out.deactivate()
         self.model.fs.P_high_valve_in.deactivate()
-        self.model.fs.evap_approach_low.deactivate()
-        self.model.fs.evap_approach_up.deactivate()
-        self.model.fs.cond_approach_low.deactivate()
-        self.model.fs.cond_approach_up.deactivate()
-        
+
         '''
         # This constraint is redundant with another constraint
         @self.model.fs.expansion_valve.Constraint(doc="Must be two-phase")
@@ -384,7 +271,6 @@ class SimpleVaporCompressionCyclePLR:
             u.T_upper_bound.deactivate()
 
     def draw_thermodynamic_diagrams(self):
-        """Render refrigerant property charts from the property package."""
         self.model.fs.properties.hp_diagram()
         plt.show()
 
@@ -398,13 +284,16 @@ class SimpleVaporCompressionCyclePLR:
                                    low_side_temperature = -20, # degC
                                    high_side_temperature = 30 # degC
     ):
-        """Set initialization guesses for pressures, temperatures, and enthalpy.
+    
+        ''' Specify initial conditions for the
 
-        Temperatures are provided in degC and internally converted to K.
-        Saturation pressures are obtained with CoolProp and used to seed unit
-        inlet/outlet states around a simple cycle guess with fixed superheat
-        and subcooling offsets.
-        """
+        Arguments:
+            low_side_temperature : float
+                Low side temperature in degC
+            high_side_temperature : float
+                High side temperature in degC
+
+        '''
 
         # Convert temperatures to Kelvin
         low_side_temperature += C_to_K
@@ -485,15 +374,7 @@ class SimpleVaporCompressionCyclePLR:
         plt.show()  
 
     def initialize(self, verbose=False):
-        """Initialize each unit sequentially and propagate states through arcs.
-
-        Initialization order:
-        evaporator -> compressor -> condenser -> expansion valve
-
-        The method fixes needed inlet/outlet state variables for each unit,
-        calls the unit initializer, and then propagates solved states to the
-        downstream arc connection.
-        """
+        ''' Initialize the flowsheet '''
 
 
         # p_init has units of Pa, hence the scale factor is 1 to get Pa
@@ -590,60 +471,12 @@ class SimpleVaporCompressionCyclePLR:
                            ambient_temperature = None, # degC
                            condenser_approach = None, # degC
                            evap_sat_temperature = None, # degC
-                           debug_disable_arc_pressure_eq = False,
-                           plr = None,
-                           cd = None,
-                           cold_storage_temperature = None,
-                           approach_min = 8.0,
-                           approach_max = 10.0,
-                           soft_approach_weight = 0.02, # penality for violating approach
-                           use_soft_approach = True,
+                           debug_disable_arc_pressure_eq = False
                            ):
-        """Apply cycle specifications, bounds, and optional soft constraints.
-
-        Pressure bounds are interpreted in kPa and converted to Pa.
-        Temperature inputs are interpreted in degC and converted to K.
-
-        Soft approach model
-        -------------------
-        Evaporator approach is modeled as:
-        ``A_e = T_cold_storage - T_sat,evap``
-
-        Condenser approach is modeled as:
-        ``A_c = T_sat,cond - T_ambient``
-
-        Each is constrained to a target band ``[approach_min, approach_max]``
-        with nonnegative slacks:
-
-        ``A_e >= approach_min - eps_evap_low``
-        ``A_e <= approach_max + eps_evap_high``
-        ``A_c >= approach_min - eps_cond_low``
-        ``A_c <= approach_max + eps_cond_high``
-
-        When ``use_soft_approach`` is true, conflicting hard saturation
-        equalities are deactivated.
-        """
         # print(superheating)
         assert superheating >= 0, "Superheating must be greater than or equal to 0"
         assert subcooling >= 0, "Subcooling must be greater than or equal to 0"
         assert max_pressure_ratio > 1.2, "Maximum pressure ratio must be greater than 1.2"
-        if plr is not None:
-            assert 0.0 <= plr <= 1.0, "PLR must be in [0, 1]"
-            self.plr = plr
-        if cd is not None:
-            assert cd >= 0.0, "CD must be non-negative"
-            self.cd = cd
-        if cold_storage_temperature is not None:
-            self.model.fs.cold_storage_T.set_value(cold_storage_temperature + C_to_K)
-        if ambient_temperature is not None:
-            self.model.fs.ambient_T_soft.set_value(ambient_temperature + C_to_K)
-        
-        self.model.fs.approach_min.set_value(approach_min)
-        self.model.fs.approach_max.set_value(approach_max)
-        self.model.fs.soft_approach_weight.set_value(soft_approach_weight)
-
-        self.model.fs.plr.set_value(self.plr)
-        self.model.fs.cd.set_value(self.cd)
         # assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
 
         ## Unfix the conditions from initialization
@@ -682,12 +515,6 @@ class SimpleVaporCompressionCyclePLR:
             # self.model.fs.expansion_valve.two_phase_constraint.deactivate()
         # Need to decide what to do for PH here
 
-        # Resetting slacks
-        self.model.fs.eps_evap_low.set_value(0.0)
-        self.model.fs.eps_evap_high.set_value(0.0)
-        self.model.fs.eps_cond_low.set_value(0.0)
-        self.model.fs.eps_cond_high.set_value(0.0)
-        
         def check_input(bounds):
             if bounds is not None and len(bounds) == 2:
                 return True
@@ -771,7 +598,6 @@ class SimpleVaporCompressionCyclePLR:
             self.model.fs.evaporator.evap_sat_constraint.activate()
         else:
             self.model.fs.evaporator.evap_sat_constraint.deactivate()
-            
 
         ## Compressor
 
@@ -882,25 +708,6 @@ class SimpleVaporCompressionCyclePLR:
             self.model.fs.condenser.approach_constraint.activate()
         else:
             self.model.fs.condenser.approach_constraint.deactivate()
-            
-        ## Adding soft approach constraints
-        
-        if use_soft_approach and (cold_storage_temperature is not None) and (ambient_temperature is not None):
-            self.model.fs.evap_approach_low.activate()
-            self.model.fs.evap_approach_up.activate()
-            self.model.fs.cond_approach_low.activate()
-            self.model.fs.cond_approach_up.activate()
-            
-            #deactivate hard constraints to avoid model conflict
-            self.model.fs.evaporator.evap_sat_constraint.deactivate()
-            self.model.fs.condenser.approach_constraint.deactivate()
-        else:
-            self.model.fs.evap_approach_low.deactivate()
-            self.model.fs.evap_approach_up.deactivate()
-            self.model.fs.cond_approach_low.deactivate()
-            self.model.fs.cond_approach_up.deactivate()
-            
-              
 
 
         ## Expansion Valve
@@ -1001,16 +808,6 @@ class SimpleVaporCompressionCyclePLR:
         calculate_scaling_factors(self.model)
 
     def optimize_COP(self, verbose, initialize=True, optimize=True):
-        """Solve initialization and/or optimization and return full-load COP.
-
-        If ``optimize`` is true, activates the COP objective. If false, solves
-        as a feasibility problem and computes COP from solved duties/work.
-
-        Post-solve cached reporting values:
-        ``_last_cop_full = COP``
-        ``_last_plf = PLF(PLR, CD)``
-        ``_last_cop_part = _last_plf * _last_cop_full``
-        """
 
         solver = get_solver()
         solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver':'ma57'} # relax the tolerance
@@ -1088,30 +885,9 @@ class SimpleVaporCompressionCyclePLR:
         # Save the status
         self.optimization_converged = optimization_converged
 
-        cop_full = value(self.model.fs.cop)
-        plf = self._compute_plf(value(self.model.fs.plr), value(self.model.fs.cd))
-        self._last_cop_full = cop_full
-        self._last_plf = plf
-        self._last_cop_part = plf * cop_full
-
         return value(self.model.fs.cop), optimization_converged
 
-    def get_full_load_cop(self):
-        """Return full-load COP directly from the solved model variable."""
-        return value(self.model.fs.cop)
-
-    def get_part_load_cop(self):
-        """Return post-corrected part-load COP.
-
-        Math:
-        ``COP_part = PLF * COP_full``
-        ``PLF = 1 - CD * (1 - PLR)``
-        """
-        plf = self._compute_plf(value(self.model.fs.plr), value(self.model.fs.cd))
-        return plf * value(self.model.fs.cop)
-
     def report_solution(self):
-        """Print COP and plot solved cycle state points on property diagrams."""
 
         print("Optimized COP:", round(value(self.model.fs.cop),3))
 

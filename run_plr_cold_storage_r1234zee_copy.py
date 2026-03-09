@@ -41,7 +41,7 @@ def main():
     cold_storage_setpoint_c = -20.0
     evap_sat_c = cold_storage_setpoint_c - 10.0  # -30 C
     condenser_approach_c = 10.0
-    ambient_temps = np.arange(15.0, 46.0, 5.0)
+    ambient_temps = np.arange(10.0, 46.0, 5.0)
 
     cycle, fluid_name_used = _build_cycle_with_fallback()
     cp_fluid = cycle.fluid_name

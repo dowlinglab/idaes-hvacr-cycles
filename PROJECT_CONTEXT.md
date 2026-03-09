@@ -4,7 +4,7 @@
 idaes-hvacr-cycles
 
 ## Last Updated
-2026-03-03
+2026-03-04
 
 ## Current Objective
 Establish and maintain a persistent project research memory backbone for disciplined development and reproducible engineering decisions.
@@ -58,6 +58,14 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   `alpha0_idaes_with_second_derivs`, `alphar_idaes_with_second_derivs`,
   `bell2023_departure_alphar_second_derivs`, and `mixture_alpha0_alphar_second_derivs`.
 - 2026-03-03: Removed finite-difference second-derivative fallback from `compute_table1_properties` for `Cv/Cp/speed_of_sound`; retained `fd_rel` argument only for backward API compatibility metadata.
+- 2026-03-04: For PLR-cycle brainstorming, agreed not to hard-fix evaporator saturation temperature to a single value for cold-storage runs.
+- 2026-03-04: Proposed evaporator saturation band relative to cold storage setpoint:
+  `T_evap_sat = T_cold_storage - (8 to 10 C)` (example at `-20 C` storage gives `-30 to -28 C`).
+- 2026-03-04: Proposed condenser saturation band relative to ambient:
+  `T_cond_sat = T_ambient + (8 to 10 C)` instead of fixed approach.
+- 2026-03-04: Ambient sweep range for current cold-storage PLR studies updated to `10 to 25 C`.
+- 2026-03-04: Confirmed compressor isentropic-efficiency default alignment target across base and PLR code: `0.75`.
+- 2026-03-04: Confirmed compressor vapor-only outlet guard is intentionally retained for physical validity and solver robustness.
 
 ## Assumptions
 - Date format uses ISO (`YYYY-MM-DD`) unless a different format is explicitly required.
@@ -66,6 +74,7 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - During differentiation in `(tau, delta)`, composition is treated as constant.
 - Mixture reducing functions are treated as composition-only for this derivative path (no explicit `∂/∂x` coupling terms yet).
 - External API composition basis is mass fraction for usability; internal EOS/reducing rules continue to use mole fraction.
+- Cold-storage PLR studies use condenser-side ambient coupling; evaporator is coupled via refrigerant-side constraints (no explicit evaporator air-side HX in base model).
 - Saturation solver currently targets pure fluids only and operates in molar density basis internally.
 - Auxiliary saturation density fits in JSON are used as initial guesses and as final fallback if nonlinear root solves fail.
 
@@ -122,6 +131,7 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - Should unit conventions be consolidated into a single shared module/spec document?
 - When should strict chain-rule mapping be implemented for pure-fluid-to-mixture derivative transfer?
 - Should composition-coupling derivative terms (`∂/∂x` effects through reducing functions) be added in the next model extension?
+- For PLR cold-storage runs, should evaporator/condenser approach bands be implemented as hard bounds, soft penalties, or explicit HX UA-driven equations?
 
 ## Next Concrete Steps
 1. Audit existing source files for header/docstring/breadcrumb compliance.
@@ -144,6 +154,10 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 16. Add dedicated automated tests for VLE path:
     endpoint consistency (`x->0/1`), fugacity-equality residual checks, and regression baselines for agreed reference states.
 17. Continue strict session discipline: read/update `PROJECT_CONTEXT.md` at start/end of each significant VLE/dome iteration with solver settings, tolerances, and failure diagnostics.
+18. For PLR cold-storage modeling, draft and review a non-hard setpoint constraint spec with:
+    `T_evap_sat` band, `T_cond_sat` band, and per-point reporting of achieved approaches.
+19. Add manual-audit outputs for refrigeration first-law checks:
+    `Q_evap`, `W_comp`, `Q_cond`, and residual `Q_cond - (Q_evap + W_comp)`.
 
 ## Change Log (Chronological)
 - 2026-03-02: Created `PROJECT_CONTEXT.md` with required persistent structure and initial baseline entries for project discipline adoption.
@@ -218,6 +232,7 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - 2026-03-03: Investigated R515A true-VLE root-solver failures in `mixture_true_vle_copy.py`.
   Observed `scipy.optimize.root(method='hybr')` divergence into nonphysical states, causing EOS overflow in `alphar_idaes_with_derivs` (`delta**di` overflow) during vapor-density iterations.
   Actionable next step: replace unconstrained HYBR solve with bounded/damped least-squares (`least_squares` with variable bounds in transformed space) and strict non-finite-state rejection before EOS evaluation.
+- 2026-03-04: Added PLR/cold-storage brainstorming notes and manual-check equations in `verification/plr_brainstorm_manual_checks_2026-03-04.md`.
 - 2026-03-03: Added `scripts/validate_r515a_saturation.py` to compare model predictions against NIST TN 2063 Table-7 R515A reference point at `T=277.6 K`, including SI and IP outputs (kPa/psia and kJ/kg/Btu-lbm).
 - 2026-03-03: Executed R515A validation using `scripts/validate_r515a_saturation.py` against NIST TN 2063 Table-7 point (`T=277.6 K`, `w1=0.88`).
   Solver-based VLE results: bubble `P=262.32 kPa` (`+3.97%` vs `252.31 kPa`), dew `P=261.49 kPa` (`+3.64%`), and latent heat `171.89..172.46 kJ/kg` (`-2.02%..-1.69%` vs `175.43 kJ/kg`).
@@ -1405,3 +1420,45 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
   - `h_cap_kJkg = 426.3612968931469`
 
 - Scope remains plotting-only; EOS and saturation-table generation unchanged.
+
+## 2026-03-09 — PLR Model Breadcrumbs (`vapor_compression_plr.py`)
+
+- Scope and intent:
+  - `vapor_compression_plr.py` is the active IDAES PLR cycle implementation for
+    full-load COP solve plus PLF-based post-correction.
+  - Current soft-constraint direction is to enforce evaporator/condenser
+    approach bands with nonnegative slack variables and objective penalty.
+
+- PLR/CD and COP handling:
+  - `self.model.fs.cop` remains the solved full-load COP variable.
+  - PLF is computed by helper: `PLF = 1 - CD * (1 - PLR)`.
+  - Part-load COP is computed as post-processing:
+    `COP_part = PLF * COP_full`.
+  - `set_specifications(...)` includes `plr` and `cd` optional overrides and
+    updates model parameters through `.set_value(...)`.
+
+- Soft approach constraints (target band 8-10 K):
+  - Parameters: `approach_min`, `approach_max`, `soft_approach_weight`.
+  - Slacks: `eps_evap_low`, `eps_evap_high`, `eps_cond_low`, `eps_cond_high`.
+  - Temperature references:
+    - `cold_storage_T` (K)
+    - `ambient_T_soft` (K)
+  - Equations represent:
+    - evaporator approach: `cold_storage_T - T_sat_evap in [8, 10]` (soft)
+    - condenser approach: `T_sat_cond - ambient_T_soft in [8, 10]` (soft)
+  - Activation is controlled in `set_specifications(...)` via
+    `use_soft_approach`.
+
+- Known implementation corrections already made:
+  - Fixed PLR parameter initialization typo (`self.plr` instead of undefined
+    `self.plf`).
+  - Corrected soft ambient param assignment to `self.model.fs...`.
+  - Corrected condenser soft constraint references from invalid
+    `approach.min/max` to `approach_min/max`.
+  - Added getters:
+    - `get_full_load_cop()`
+    - `get_part_load_cop()`
+
+- Documentation updates:
+  - Module header updated with author/codex/QA breadcrumb template.
+  - Detailed method docstrings added with governing math and intent.
