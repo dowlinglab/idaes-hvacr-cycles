@@ -58,7 +58,7 @@ def main():
         high_side_pressure=high_side_bounds,
         evaporator_temperature=(-45, -15),
         condenser_temperature=(15, 50),
-        subcooling=3,
+        subcooling=5,
         superheating=3,
         max_pressure_ratio=20,
         plr=0.75,

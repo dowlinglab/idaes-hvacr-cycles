@@ -2,7 +2,7 @@
 IDAES Vapor Compression Cycle with PLR and Soft-Approach Constraints
 
 Author: Shilpa Narasimhan
-Codex Support: OpenAI Codex (CASE)
+Codex Support: OpenAI Codex 
 QA/Testing: Shilpa Narasimhan
 
 Description:
