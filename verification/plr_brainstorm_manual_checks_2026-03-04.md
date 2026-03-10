@@ -54,3 +54,22 @@ Use absolute values with consistent sign conventions if needed.
 ## Important Run-Logic Note
 If using fallback solve paths, pass the full point specification again.
 Do not call `set_specifications()` with only a debug flag, since that can silently revert to defaults.
+
+## Addendum (2026-03-10): IDAES Condenser-Train Initialization Debug
+
+### Current Debug Scope
+- Active copy model: `vapor_compression_plr_hx_0d_cond3.py`.
+- Working mode: one-ambient debug first, then sweeps only after one-point convergence.
+
+### Key Observation
+- Nonphysical condenser-air seeds (~500 K) appear during warm-start mapping when air inlet temperatures are reconstructed directly from zoned duties.
+
+### Current Stabilization Direction
+1. Fix only the first condenser-train air inlet temperature and composition.
+2. Leave downstream condenser-air inlets unfixed so arc equalities determine continuity.
+3. Seed downstream air temperatures to ambient-like values (not from raw `Q/C_air` reconstruction).
+4. Keep refrigerant enthalpy seeds continuous across DS->COND->SC interfaces.
+5. Avoid conflicting hardcoded inlet-enthalpy anchors during zoned warm-start usage.
+
+### Reporting Rule
+- For this stage, output PFD + stream table for one ambient point before generating overlay figures.

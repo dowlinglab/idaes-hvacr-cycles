@@ -6,6 +6,20 @@ This repository for created by Prof. Alexander Dowling at the University of Notr
 
 This repository is an "alpha" version; please use the code with caution.
 
+## Current PLR+HX Workstream (2026-03-10)
+
+- Frozen reference behavior: non-IDAES epsilon-NTU PLR+HX path.
+- Active root files for PLR/HX work:
+  - `vapor_compression.py`
+  - `vapor_compression_plr.py`
+  - `vapor_compression_plr_hx.py` (frozen non-IDAES reference)
+  - `run_plr_cold_storage_r134a_epsntu_copy.py`
+  - `run_plr_cold_storage_r1234zee_epsntu_copy.py`
+- Current cold-storage boundary policy used in active runs:
+  - `T_evap_sat` bounds from `T_cold_sp - 10` to `T_cold_sp - 8`
+  - `T_cond_sat` bounds from `T_amb + 8` to `T_amb + 10`
+- Exploratory/non-active artifacts are moved to `for_review/` (gitignored).
+
 ## Version
 
 `simple_refridgeration.ipynb`

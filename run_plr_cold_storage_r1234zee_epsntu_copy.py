@@ -7,7 +7,7 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 
-from vapor_compression_plr_epsntu_copy import (
+from vapor_compression_plr_hx import (
     Mode,
     SimpleVaporCompressionCyclePLREpsNTU,
 )
@@ -109,6 +109,13 @@ def main():
         converged_vals.append(bool(ok))
         sh_vals.append(float(diag.get("SH_actual", float("nan"))))
         sc_vals.append(float(diag.get("SC_actual", float("nan"))))
+        sh_out = sh_vals[-1]
+        sc_out = sc_vals[-1]
+        cpart_out = cop_part_vals[-1]
+        print(
+            f"Ambient {ambient_c:>5.1f} C | converged={int(ok)} | "
+            f"COP_part={cpart_out:.4f} | SH={sh_out:.3f} K | SC={sc_out:.3f} K"
+        )
 
     out_csv = "cop_vs_ambient_plr_cold_storage_r1234zee_epsntu_copy.csv"
     out_png = "cop_vs_ambient_plr_cold_storage_r1234zee_epsntu_copy.png"
@@ -141,7 +148,7 @@ def main():
             np.array(cop_part_vals)[ok_mask],
             marker="s",
             linewidth=2.2,
-            label="PLR + HX (eps-NTU copy)",
+            label="COP actual",
         )
     ax.plot(
         ambient_temps,
@@ -149,9 +156,8 @@ def main():
         linestyle="--",
         linewidth=2.0,
         color="black",
-        label="Carnot COP",
+        label="COP carnot",
     )
-    ax.set_title("R1234ze(E): Non-IDAES Epsilon-NTU Copy vs Carnot")
     ax.set_xlabel("Ambient temperature (C)")
     ax.set_ylabel("COP")
     ax.grid(True, alpha=0.25)

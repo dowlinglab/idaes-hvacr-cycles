@@ -81,6 +81,7 @@ class SimpleVaporCompressionCyclePLRNTU:
         assert 0.0 <= CD <= 1.0, "CD must be in [0,1]"
 
         self.fluid_name = fluid_name
+        self.idaes_fluid_name, self.cp_fluid_name = self._map_fluid_names(fluid_name)
         self.compressor_efficiency = compressor_efficiency
         self.plr = PLR
         self.cd = CD
@@ -91,7 +92,7 @@ class SimpleVaporCompressionCyclePLRNTU:
 
         state_vars = StateVars.PH if mode == Mode.PH else StateVars.TPX
         self.model.fs.ref_props = HelmholtzParameterBlock(
-            pure_component=fluid_name,
+            pure_component=self.idaes_fluid_name,
             state_vars=state_vars,
             amount_basis=AmountBasis.MASS,
         )
@@ -110,6 +111,17 @@ class SimpleVaporCompressionCyclePLRNTU:
 
         self._define_flowsheet()
         self.optimization_converged = None
+
+    @staticmethod
+    def _map_fluid_names(fluid_name: str):
+        """Map external fluid names to IDAES and CoolProp naming conventions."""
+
+        key = fluid_name.strip().lower()
+        if key in {"r1234ze(e)", "r1234zee", "r1234zee", "r1234zee"}:
+            return "R1234ze", "R1234ze(E)"
+        if key == "r1234ze":
+            return "R1234ze", "R1234ze(E)"
+        return fluid_name, fluid_name
 
     @staticmethod
     def _compute_plf(plr: float, cd: float) -> float:
@@ -320,13 +332,13 @@ class SimpleVaporCompressionCyclePLRNTU:
         superheat = 3.0
         subcool = 3.0
 
-        p_low = CP.PropsSI("P", "T", TL, "Q", 0, self.fluid_name)
-        p_high = CP.PropsSI("P", "T", TH, "Q", 0, self.fluid_name)
+        p_low = CP.PropsSI("P", "T", TL, "Q", 0, self.cp_fluid_name)
+        p_high = CP.PropsSI("P", "T", TH, "Q", 0, self.cp_fluid_name)
 
-        h4 = CP.PropsSI("H", "T", TL, "Q", 0.2, self.fluid_name)
-        h1 = CP.PropsSI("H", "T", TL + superheat, "Q", 1, self.fluid_name)
-        h2 = CP.PropsSI("H", "T", TH + superheat, "Q", 1, self.fluid_name)
-        h3 = CP.PropsSI("H", "T", TH - subcool, "Q", 0, self.fluid_name)
+        h4 = CP.PropsSI("H", "T", TL, "Q", 0.2, self.cp_fluid_name)
+        h1 = CP.PropsSI("H", "T", TL + superheat, "Q", 1, self.cp_fluid_name)
+        h2 = CP.PropsSI("H", "T", TH + superheat, "Q", 1, self.cp_fluid_name)
+        h3 = CP.PropsSI("H", "T", TH - subcool, "Q", 0, self.cp_fluid_name)
 
         self._init = {
             "p_low": p_low,
@@ -453,19 +465,8 @@ class SimpleVaporCompressionCyclePLRNTU:
         fs.P_high.setlb(p_high_min * 1e3)
         fs.P_high.setub(p_high_max * 1e3)
 
-        fs.P_low_target.set_value((p_low_min + p_low_max) * 0.5 * 1e3)
-
-        # If condenser approach is active, let P_high be implied by Tsat relation.
-        if ambient_temperature is not None and condenser_approach is not None:
-            fs.ambient_T.set_value(ambient_temperature + C_TO_K)
-            fs.approach_T.set_value(condenser_approach)
-            fs.approach_constraint.activate()
-            fs.P_high_target_constraint.deactivate()
-            fs.condenser.cold_side_inlet.temperature[0].fix(ambient_temperature + C_TO_K)
-        else:
-            fs.approach_constraint.deactivate()
-            fs.P_high_target.set_value((p_high_min + p_high_max) * 0.5 * 1e3)
-            fs.P_high_target_constraint.activate()
+        fs.approach_constraint.deactivate()
+        fs.P_high_target_constraint.activate()
         # Tie evaporator air inlet to cold-storage setpoint when provided.
         if cold_storage_setpoint is not None:
             fs.evaporator.hot_side_inlet.temperature[0].fix(cold_storage_setpoint + C_TO_K)
@@ -487,18 +488,26 @@ class SimpleVaporCompressionCyclePLRNTU:
             evap_hi = cold_storage_setpoint + evap_offset_bounds[1]
         else:
             evap_lo, evap_hi = evaporator_temperature
+        cond_lo, cond_hi = condenser_temperature
+
+        # Use midpoint sat temperatures from requested bounds and map to pressure targets.
+        t_evap_sat_c = float(evap_sat_temperature) if evap_sat_temperature is not None else 0.5 * (evap_lo + evap_hi)
+        t_cond_sat_c = 0.5 * (cond_lo + cond_hi)
+        self._t_evap_sat_c = t_evap_sat_c
+        self._t_cond_sat_c = t_cond_sat_c
+
+        p_low_sat = CP.PropsSI("P", "T", t_evap_sat_c + C_TO_K, "Q", 1, self.cp_fluid_name)
+        p_high_sat = CP.PropsSI("P", "T", t_cond_sat_c + C_TO_K, "Q", 0, self.cp_fluid_name)
+        fs.P_low_target.set_value(float(p_low_sat))
+        fs.P_high_target.set_value(float(p_high_sat))
+        fs.P_low_target_constraint.activate()
+        fs.P_high_target_constraint.activate()
+
+        # Keep inequality guards but derive them from the same requested ranges.
         fs.evap_Tmin.set_value(evap_lo + C_TO_K)
         fs.evap_Tmax.set_value(evap_hi + C_TO_K)
-        fs.cond_Tmin.set_value(condenser_temperature[0] + C_TO_K)
-        fs.cond_Tmax.set_value(condenser_temperature[1] + C_TO_K)
-
-        if evap_sat_temperature is not None:
-            # Soft hook: pin low pressure from requested saturation temperature.
-            p_low_sat = CP.PropsSI("P", "T", evap_sat_temperature + C_TO_K, "Q", 1, self.fluid_name)
-            fs.P_low_target.set_value(p_low_sat)
-            fs.P_low_target_constraint.activate()
-        else:
-            fs.P_low_target_constraint.activate()
+        fs.cond_Tmin.set_value(cond_lo + C_TO_K)
+        fs.cond_Tmax.set_value(cond_hi + C_TO_K)
 
         fs.compressor.efficiency_isentropic[0].fix(self.compressor_efficiency)
         fs.evaporator.effectiveness[0].unfix()
@@ -513,7 +522,7 @@ class SimpleVaporCompressionCyclePLRNTU:
 
         solver = get_solver()
         solver.options = {
-            "max_iter": 4000,
+            "max_iter": 300,
             "tol": 1e-6,
             "acceptable_tol": 1e-5,
         }
@@ -535,8 +544,6 @@ class SimpleVaporCompressionCyclePLRNTU:
 
         try:
             results = solver.solve(self.model, tee=verbose)
-            if results.solver.termination_condition != TerminationCondition.optimal:
-                results = solver.solve(self.model, tee=verbose)
         except Exception:
             self.optimization_converged = False
             return float("nan"), False
@@ -554,12 +561,8 @@ class SimpleVaporCompressionCyclePLRNTU:
         self.optimization_converged = converged
 
         if not converged:
-            try:
-                DiagnosticsToolbox(
-                    self.model, constraint_residual_tolerance=1e-6
-                ).display_constraints_with_large_residuals()
-            except Exception:
-                pass
+            # Keep runner output concise; detailed residual diagnostics are run separately.
+            pass
 
         cop_full = value(self.model.fs.cop)
         self._last_cop_full = cop_full

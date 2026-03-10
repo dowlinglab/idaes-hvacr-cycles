@@ -4,12 +4,13 @@
 idaes-hvacr-cycles
 
 ## Last Updated
-2026-03-04
+2026-03-10
 
 ## Current Objective
 Establish and maintain a persistent project research memory backbone for disciplined development and reproducible engineering decisions.
 Provide a stable query interface for pressure/enthalpy at a single state point while preserving strict model behavior.
 Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline for phase-aware validation workflows.
+Stabilize an IDAES-based PLR+HX implementation that reproduces the frozen non-IDAES lumped baseline behavior for R134a and R1234ze(E) ambient sweeps.
 
 ## System Architecture Overview
 - Pending detailed capture.
@@ -17,6 +18,13 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - Added pure-fluid saturation module (`helmholtz_saturation.py`) and wrapper CLI (`scripts/plot_ph_dome.py`) for dome CSV/figure generation.
 
 ## Key Technical Decisions
+- 2026-03-10: Froze the non-IDAES PLR+HX epsilon-NTU baseline as the reference behavior target for subsequent IDAES replication work.
+- 2026-03-10: Active boundary policy for cold-storage runs:
+  `T_evap_sat` derived from `T_cold_sp-10` to `T_cold_sp-8` bounds and
+  `T_cond_sat` derived from `T_amb+8` to `T_amb+10` bounds.
+- 2026-03-10: PLR treatment remains post-correction only (`COP_part = PLF * COP_full`) with normalized reference refrigerant flow in cycle equations.
+- 2026-03-10: Repository organization update: active model/runners kept in root; exploratory artifacts moved to `for_review/` and `for_review/` added to `.gitignore`.
+- 2026-03-10: IDAES `HeatExchangerNTU`, `HeatExchanger1D`, `HeatExchangerLumpedCapacitance`, and `HeatExchanger` (0-D) copy-based attempts were run against the frozen closure policy but are currently non-convergent on ambient sweeps.
 - 2026-03-02: Adopted `PROJECT_CONTEXT.md` as mandatory session-start/session-end context memory at repository root.
 - 2026-03-02: Standardized required section schema for traceability across sessions.
 - 2026-03-02: Defined "point" for p,h query API as `(T [K], rho_mass [kg/m^3], composition x1 [mol/mol], x2=1-x1)`.
@@ -90,6 +98,7 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - True-VLE chemical potentials are finite-difference estimates (not closed-form analytic composition derivatives), which can affect conditioning.
 - `compute_table1_properties` still carries `fd_rel` for API compatibility, but it is no longer used in analytic derivative calculations.
 - True-VLE branch robustness remains the main unresolved numerical limitation; low-temperature pressure bias vs Honeywell references persists despite improved residual closure.
+- Current IDAES PLR+HX copy variants (NTU/1D/LC/0-D) have not yet achieved converged COP-vs-ambient sweeps under the frozen cold-storage boundary policy (latest runs: `0/8` converged points for R134a and R1234ze(E)).
 
 ## Validation Status
 - Context file bootstrap complete.
@@ -132,6 +141,7 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 - When should strict chain-rule mapping be implemented for pure-fluid-to-mixture derivative transfer?
 - Should composition-coupling derivative terms (`∂/∂x` effects through reducing functions) be added in the next model extension?
 - For PLR cold-storage runs, should evaporator/condenser approach bands be implemented as hard bounds, soft penalties, or explicit HX UA-driven equations?
+- Which minimal IDAES HX formulation/closure set should be the stabilization target before reintroducing higher-fidelity spatial models?
 
 ## Next Concrete Steps
 1. Audit existing source files for header/docstring/breadcrumb compliance.
@@ -158,8 +168,19 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
     `T_evap_sat` band, `T_cond_sat` band, and per-point reporting of achieved approaches.
 19. Add manual-audit outputs for refrigeration first-law checks:
     `Q_evap`, `W_comp`, `Q_cond`, and residual `Q_cond - (Q_evap + W_comp)`.
+20. Stabilize one single-point IDAES PLR+HX solve (`R134a`, `Tamb=20 C`) under frozen bounds before reattempting ambient sweeps.
+21. Add explicit scaling coverage for HX `U`, `A`, heat terms, and compressor/valve work in active IDAES PLR+HX copy.
+22. Once one-point convergence is obtained, perform warm-start continuation across ambient (`10..45 C`) and then validate `% of Carnot` against the frozen non-IDAES reference trend.
 
 ## Change Log (Chronological)
+- 2026-03-10: Added root-level frozen non-IDAES PLR+HX alias `vapor_compression_plr_hx.py` from epsilon-NTU copy path.
+- 2026-03-10: Added `for_review/` directory for non-active scripts/artifacts and updated `.gitignore` to ignore `for_review/`.
+- 2026-03-10: Added and tested copy-based IDAES PLR+HX variants:
+  `vapor_compression_plr_hx_idaes_ntu.py`, `vapor_compression_plr_hx1d.py`,
+  `vapor_compression_plr_hx_lc.py`, and `vapor_compression_plr_hx_0d.py`
+  with paired R134a/R1234ze runners and SH/SC CSV reporting.
+- 2026-03-10: Current convergence status for latest ambient sweeps (`10..45 C`, frozen bounds):
+  all IDAES copy variants above report `0/8` converged points for both R134a and R1234ze(E).
 - 2026-03-02: Created `PROJECT_CONTEXT.md` with required persistent structure and initial baseline entries for project discipline adoption.
 - 2026-03-02: Added point-definition breadcrumb `(T, rho_mass, x1)` and standardized returned units `(kPa, kJ/kg)` for p,h query interface.
 - 2026-03-02: Recorded strict blocker status: end-to-end execution currently fails by design at `mixture_alpha0_alphar_derivs` `NotImplementedError`.
@@ -1793,3 +1814,102 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
     - `heat_transfer_equation`
     - `wall_temperature_eq`
     - `condenser.cold_side.material_balances[CO2]`
+
+## 2026-03-09: IDAES 0D Condenser-3-Zone Copy (Debug State)
+
+- Added copy module: `vapor_compression_plr_hx_0d_cond3.py`.
+- Implemented condenser as three serial `HeatExchanger` (0-D) blocks:
+  - `desuperheater` -> `condenser` (Underwood delta-T callback) -> `subcooler`.
+- Refrigerant property setup switched to Helmholtz `PhaseType.LG` and `StateVars.PH`.
+- Added copy runners:
+  - `run_plr_cold_storage_r134a_hx_0d_cond3.py`
+  - `run_plr_cold_storage_r1234zee_hx_0d_cond3.py`
+- Generated zoned non-IDAES debug references on ambient 10..45 C:
+  - `debug_zoned_ref_r134a_10_45.csv`
+  - `debug_zoned_ref_r1234zee_10_45.csv`
+- Generated pointwise comparison files:
+  - `debug_compare_zoned_vs_idaes_cond3_r134a.csv`
+  - `debug_compare_zoned_vs_idaes_cond3_r1234zee.csv`
+- Current result: IDAES cond3 runs converge at `0/8` points for both fluids; zoned non-IDAES references are converged at all points.
+
+## Session Breadcrumb (2026-03-10, Zoned Warm-Start / Air-Chain Debug)
+
+### Active File Under Debug
+- `/Users/snarasi2/idaes-hvacr-cycles/vapor_compression_plr_hx_0d_cond3.py`
+
+### User-Requested Immediate Focus
+- Pause broad sweeps and debug one ambient point first.
+- Print PFD + stream table for that single point to verify continuity.
+- Stabilize warm-start bridge from non-IDAES zoned model without nonphysical air temperatures.
+
+### Current Observed Failure Signature
+- Solver remains non-converged at the one-point debug run.
+- Air-side seeded states can jump to nonphysical values (~500 K / 226.85 C) before solve.
+- Residual pattern indicates inconsistent initialization between manual inlet/outlet fixes and arc-coupled stream equalities.
+
+### Root-Cause Hypothesis (Current)
+1. Air-side over-specification during initialization:
+   - A downstream HX inlet can be seeded/fixed inconsistently while also arc-linked.
+2. Warm-start bridge inconsistency:
+   - Zoned-duty-derived air temperature reconstruction (`T += Q/C_air`) can produce unrealistic seeds on mismatched basis.
+3. Refrigerant enthalpy continuity conflict:
+   - Hardcoded inlet seeds in `initialize()` can disagree with zoned-profile handoff values.
+
+### Next Debug Actions (Single-Point Only)
+1. Apply strict "one fixed condenser-air inlet" policy (all downstream air inlet temperatures unfixed).
+2. Keep serial condenser-air arcs physically consistent and use ambient-range temperature seeds only.
+3. Enforce refrigerant seed continuity at DS->COND->SC interfaces.
+4. Remove/disable hardcoded condenser/subcooler inlet enthalpy anchors when zoned warm-start is active.
+5. Re-run one-point case and report only PFD + stream table before any ambient sweep.
+
+### Guardrail Reminder
+- Do not alter `vapor_compression.py` baseline.
+- Keep all HX experiments isolated in copy files.
+
+## Session Breadcrumb (2026-03-10, End-of-Day Cond3 Re-Chain Debug)
+
+### Active Debug File
+- `/Users/snarasi2/idaes-hvacr-cycles/vapor_compression_plr_hx_0d_cond3.py`
+
+### User-Requested Structural Patches Applied
+1. Re-chained condenser-train air path to:
+   - `Ambient -> SC_cold_in -> COND_cold_in -> DS_cold_in -> Exhaust`
+2. Enforced single fixed condenser-train air inlet:
+   - only `subcooler.cold_side_inlet` (`T` and `P`) fixed to ambient/1 atm.
+3. Added high-pressure manifold constraints:
+   - `P_comp_out = P_DS_in = P_COND_in = P_SC_in` (explicit equalities).
+4. Added subcooler refrigerant-side zero-dP closure:
+   - `P_SC_hot_out = P_SC_hot_in`.
+5. Added air-side temperature caps:
+   - `T_air_out <= 350 K` on evaporator hot-side out and condenser-train cold-side outs.
+6. Added subcooler outlet enthalpy initialization kickstart in fallback seed:
+   - `h_SC_out_seed = h_f - 5000 J/kg`.
+
+### Additional Fixes Applied During Debug
+- Prevented warm-start routine from reactivating arc `pressure_equality` constraints (to avoid pressure over-closure with explicit manifold constraints).
+- Added deterministic fallback warm-start seed when zoned bridge fails, using target `P_low/P_high` and staged refrigerant enthalpy seeds.
+
+### Latest One-Point Test Case
+- Fluid: `R134a`
+- Ambient: `20 C`
+- Cold storage setpoint: `-20 C`
+- Bounds used:
+  - `P_low: 60..200 kPa`
+  - `P_high: 500..4000 kPa`
+  - `T_evap_sat band: [Tsp-10, Tsp-8] C`
+  - `T_cond_sat band: [Tamb+8, Tamb+10] C`
+
+### Latest Solver Status
+- Final one-point solve result: **not converged**.
+- Reported termination in solve path: `other` with message `Too few degrees of freedom (rethrown)` during initialization solve attempts.
+- Post-patch model-level closure check before solve can report `DOF=0`, but initialization-phase solve still hits the above termination.
+
+### Last Printed State Snapshot (Non-Converged)
+- Refrigerant states remained on physically plausible pressure levels for S1..S4 except SC outlet pressure anomaly persists in snapshot (`S3a` high).
+- Air-side outlet temperatures in snapshot still pinned at `226.85 C` (nonphysical), indicating the current initialization path is not reaching a valid physical branch.
+
+### Next-Step Reminder for Restart
+- First action tomorrow should be to diagnose initialization-specific DOF/over-closure separately from steady-state DOF:
+  - inspect which constraints are active inside `initialize()` solve calls,
+  - avoid solving full model while temporary fixed anchors are still active,
+  - then rerun one-point table/PFD before any ambient sweep.

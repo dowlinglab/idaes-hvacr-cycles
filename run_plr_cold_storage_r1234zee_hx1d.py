@@ -6,7 +6,7 @@ Codex Support: OpenAI Codex
 QA/Testing: Shilpa Narasimhan
 
 Description:
-    Runs COP vs ambient (10-45 C) for the IDAES HeatExchangerNTU PLR+HX copy.
+    Runs COP vs ambient (10-45 C) for the IDAES HeatExchanger1D PLR+HX copy.
 
 Context Breadcrumb:
     Uses the frozen bounds policy:
@@ -22,9 +22,9 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 
-from vapor_compression_plr_hx_idaes_ntu import (
+from vapor_compression_plr_hx1d import (
     Mode,
-    SimpleVaporCompressionCyclePLRNTU,
+    SimpleVaporCompressionCyclePLRHX1D,
 )
 
 
@@ -48,14 +48,13 @@ def _build_cycle_r1234ze():
     last_err = None
     for name in candidates:
         try:
-            cycle = SimpleVaporCompressionCyclePLRNTU(
+            cycle = SimpleVaporCompressionCyclePLRHX1D(
                 fluid_name=name,
                 compressor_efficiency=0.75,
                 PLR=0.75,
                 CD=0.13,
                 mode=Mode.PH,
-                UA_evap_W_per_K=1500.0,
-                UA_cond_W_per_K=1800.0,
+                finite_elements=2,
             )
             return cycle, name
         except Exception as exc:
@@ -67,11 +66,10 @@ def main():
     cold_storage_setpoint_c = -20.0
     ambient_temps = np.arange(10.0, 46.0, 5.0)
 
-    # IDAES NTU copy with frozen PLR settings.
+    # IDAES HX1D copy with frozen PLR settings.
     cycle, fluid_name_used = _build_cycle_r1234ze()
 
     cycle.specify_initial_conditions(low_side_temperature=-20, high_side_temperature=30)
-    cycle.initialize(verbose=False)
 
     kwargs_base = dict(
         low_side_pressure=(60.0, 200.0),
@@ -83,8 +81,6 @@ def main():
         condenser_temperature=(18.0, 20.0),
         plr=0.75,
         cd=0.13,
-        UA_evap_total=1500.0,
-        UA_cond_total=1800.0,
     )
 
     cop_full_vals = []
@@ -119,9 +115,9 @@ def main():
         sh_vals.append(float(sh))
         sc_vals.append(float(sc))
 
-    out_csv = "cop_vs_ambient_plr_cold_storage_r1234zee_hx_idaes_ntu.csv"
-    out_png = "cop_vs_ambient_plr_cold_storage_r1234zee_hx_idaes_ntu.png"
-    out_pdf = "cop_vs_ambient_plr_cold_storage_r1234zee_hx_idaes_ntu.pdf"
+    out_csv = "cop_vs_ambient_plr_cold_storage_r1234zee_hx1d.csv"
+    out_png = "cop_vs_ambient_plr_cold_storage_r1234zee_hx1d.png"
+    out_pdf = "cop_vs_ambient_plr_cold_storage_r1234zee_hx1d.pdf"
 
     with open(out_csv, "w", newline="") as f:
         w = csv.writer(f)
@@ -150,7 +146,7 @@ def main():
             np.array(cop_part_vals)[ok_mask],
             marker="s",
             linewidth=2.2,
-            label="PLR + HX (IDAES NTU)",
+            label="PLR + HX (IDAES HX1D)",
         )
     ax.plot(
         ambient_temps,
@@ -160,7 +156,7 @@ def main():
         color="black",
         label="Carnot COP",
     )
-    ax.set_title("R1234ze(E): IDAES NTU PLR + HX vs Carnot")
+    ax.set_title("R1234ze(E): IDAES HX1D PLR + HX vs Carnot")
     ax.set_xlabel("Ambient temperature (C)")
     ax.set_ylabel("COP")
     ax.grid(True, alpha=0.25)
