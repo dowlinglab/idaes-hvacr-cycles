@@ -1511,3 +1511,285 @@ Implement a pure-fluid Helmholtz-based saturation solver and P-H dome pipeline f
 ### Notes For Next Session
 - User asked to potentially delete `vapor_compression_plr_only.py` after explicit confirmation.
 - If overlays look unexpectedly flat, first check whether condenser ambient coupling (`condenser_approach`) is being passed/activated.
+
+## Session Breadcrumb (2026-03-09, Late)
+
+### Current Agreed Direction
+- Brainstorm mode only for next phase (no HX code edits yet).
+- User-selected future HX method: epsilon-NTU with 3 zones.
+- Must remain in IDAES model ecosystem.
+
+### Current Codebase State
+- `vapor_compression.py` remains unchanged.
+- `vapor_compression_plr_only.py` was deleted.
+- Kept only `vapor_compression_plr.py` as PLR model copy.
+- Removed other PLR variant files (`_SN`, `_ambient_bounds`, `_condsoft`).
+
+### Active Overlay Scripts and Outputs
+- Scripts:
+  - `run_plr_cold_storage_r134a_copy.py`
+  - `run_plr_cold_storage_r1234zee_copy.py`
+- Current overlays include 3 curves on same grid:
+  - Carnot COP
+  - vapor_compression COP
+  - vapor_compression_plr COP
+- Current run settings in scripts:
+  - ambient grid: `10..45 C` step `5 C`
+  - condenser approach coupling active: `T_cond_sat = T_amb + 20 C`
+  - evaporator temperature bounds: `(-55 C, -20 C)`
+  - PLR settings: `PLR=0.75`, `CD=0.13`
+- Latest rerun status: both fluids `8/8` converged for base and PLR.
+
+### PLR Logic Status
+- PLR applied as post-correction only in `vapor_compression_plr.py`:
+  - `PLF = 1 - CD*(1-PLR)`
+  - `COP_part = PLF * COP_full`
+- Guards currently enforced:
+  - `PLR in [0,1]`
+  - `CD in [0,1]`
+
+### IDAES HX Note (Confirmed)
+- Current evap/condenser are modeled as `Heater` units, not explicit HX units.
+- Confirmed IDAES epsilon-NTU unit model to use in next phase:
+  - `HeatExchangerNTU` (`idaes.models.unit_models`).
+
+### User Preference Reminders
+- Do not make unsolicited suggestions.
+- Do not modify code unless explicitly requested.
+
+## Session Breadcrumb (2026-03-09, Overlay-4 on Copy)
+
+### Change Scope
+- Kept original files untouched:
+  - `vapor_compression.py`
+  - `vapor_compression_plr.py`
+  - existing `run_plr_cold_storage_*_copy.py`
+- Added a PLR copy module:
+  - `vapor_compression_plr_copy.py` (direct copy of `_plr` at this step)
+- Added new overlay runner copies:
+  - `run_plr_cold_storage_r134a_plr_copy_overlay.py`
+  - `run_plr_cold_storage_r1234zee_plr_copy_overlay.py`
+
+### Overlay Curves Requested
+- New overlay runners produce 4 curves:
+  - Carnot COP
+  - vapor_compression COP
+  - PLR only COP (`PLR * COP_full`)
+  - PLR + COP (`PLF * COP_full`, where `PLF = 1 - CD*(1-PLR)`)
+
+### Output Filenames
+- R134a:
+  - `cop_vs_ambient_plr_cold_storage_r134a_plr_copy_overlay.csv`
+  - `cop_vs_ambient_plr_cold_storage_r134a_plr_copy_overlay.png`
+  - `cop_vs_ambient_plr_cold_storage_r134a_plr_copy_overlay.pdf`
+- R1234ze:
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_plr_copy_overlay.csv`
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_plr_copy_overlay.png`
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_plr_copy_overlay.pdf`
+
+### Execution Result (Overlay-4 on Copy)
+- Executed:
+  - `python3 run_plr_cold_storage_r134a_plr_copy_overlay.py`
+  - `python3 run_plr_cold_storage_r1234zee_plr_copy_overlay.py`
+- Convergence:
+  - R134a: vapor_compression `8/8`, PLR copy `8/8`
+  - R1234ze: vapor_compression `8/8`, PLR copy `8/8`
+- Figures generated:
+  - `cop_vs_ambient_plr_cold_storage_r134a_plr_copy_overlay.png`
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_plr_copy_overlay.png`
+
+## Session Breadcrumb (2026-03-09, NTU Copy Start)
+
+### User Clarification Captured
+- "PLR + COP" means: keep current cycle + PLR structure, replace heater coils with `HeatExchangerNTU`, start single NTU per coil, keep PLR as post-correction, calibrate UA to baseline, then move to zoned NTU.
+- User requested counterflow selection.
+
+### Copy-Only Implementation Added
+- New file created (no edits to originals):
+  - `vapor_compression_plr_hx_ntu_copy.py`
+- Model structure in copy:
+  - Evaporator: `HeatExchangerNTU` (air hot side, refrigerant cold side)
+  - Condenser: `HeatExchangerNTU` (refrigerant hot side, air cold side)
+  - Compressor + expansion valve retained
+  - PLR retained as post-correction (`COP_part = PLF * COP_full`)
+
+### Counterflow Status
+- Counterflow epsilon-NTU relation implemented explicitly for both HX blocks:
+  - `epsilon = (1-exp(-NTU*(1-Cr))) / (1-Cr*exp(-NTU*(1-Cr))+eps_reg)`
+
+### Current Solve Status
+- Initial NTU copy was overconstrained; corrected to DOF = 0.
+- Current blocker: one-point smoke solve still fails to converge robustly (Ipopt max-iterations / bad status in this first pass).
+- No changes were made to `vapor_compression.py` or `vapor_compression_plr.py`.
+
+## Session Breadcrumb (2026-03-09, Overlay Refresh)
+- Re-ran 4-curve overlay scripts:
+  - `run_plr_cold_storage_r134a_plr_copy_overlay.py`
+  - `run_plr_cold_storage_r1234zee_plr_copy_overlay.py`
+- Curves included in each figure:
+  - Carnot COP
+  - vapor_compression COP
+  - PLR only COP
+  - PLR + COP
+- Convergence: both fluids 8/8 for vapor_compression and PLR copy runs.
+- Refreshed outputs:
+  - `cop_vs_ambient_plr_cold_storage_r134a_plr_copy_overlay.png/.pdf/.csv`
+  - `cop_vs_ambient_plr_cold_storage_r1234zee_plr_copy_overlay.png/.pdf/.csv`
+
+## Session Breadcrumb (2026-03-09, NTU Stabilization Attempt)
+- User requested overlays with: Carnot, vapor_compression, PLR only (cycle degradation), and NTU.
+- Attempted NTU stabilization in `vapor_compression_plr_hx_ntu_copy.py`:
+  - Replaced effectiveness relation with phase-change dominant form: `epsilon = 1 - exp(-NTU)`.
+  - Deactivated fragile constraints for this copy solve path:
+    - superheating_constraint
+    - subcooling_constraint
+    - vapor_constraint
+  - Increased Ipopt iteration limit and made solve failure handling non-fatal.
+- Status:
+  - DOF confirmed 0 after specification.
+  - Still encountering non-convergence (`infeasible` and `maxIterations`) on smoke solve.
+  - Stable overlays remain available from non-NTU copy scripts.
+
+## Session Breadcrumb (2026-03-09, Zoned NTU Copy)
+- Added new copy model:
+  - `vapor_compression_plr_hx_ntu_zoned_copy.py`
+- Implemented zones:
+  - Evaporator: `evap_tp`, `evap_sh`
+  - Condenser: `cond_ds`, `cond_tp`, `cond_sc`
+- Preserved PLR post-correction (`get_part_load_cop`).
+- Added per-zone NTU getter (`get_zone_ntu`).
+- Smoke-test status (R134a, ambient=20 C case):
+  - DOF corrected from -1 to 0.
+  - Still not converging (`infeasible` / `maxIterations`).
+  - Current reported NTU values are available but solve is not successful.
+
+## Session Breadcrumb (2026-03-09, Air-Side Boundary Update)
+- Updated NTU copy models to enforce user-requested air-side conditions:
+  - Evaporator air inlet fixed at `-20 C`
+  - Condenser air inlet set from ambient sweep input (`10..45 C` in runners)
+- Files patched:
+  - `vapor_compression_plr_hx_ntu_copy.py`
+  - `vapor_compression_plr_hx_ntu_zoned_copy.py`
+- Verification checks:
+  - Single-NTU copy: evap air `-20 C`, condenser air tracks ambient (tested at `15 C`)
+  - Zoned NTU copy: both evap zones air `-20 C`, all condenser zones air track ambient (tested at `45 C`)
+
+## Session Breadcrumb (2026-03-09, Convergence Debug Progress)
+- Debug status for zoned NTU copy (`vapor_compression_plr_hx_ntu_zoned_copy.py`):
+  - Direct solve at target bounds still unstable.
+  - Relaxed -> tightened continuation now works through bound tightening to target at fixed ambient 20 C.
+- Ambient sweep test with continuation (R134a, Tamb 10..45 C):
+  - Converged with positive COP at 10, 15, 20 C.
+  - 25, 30 C: non-converged (maxIterations).
+  - 35, 40, 45 C: solver returned but with negative COP (physically invalid cooling point).
+- Interpretation:
+  - Model can find mathematically feasible states at higher ambient that do not represent cooling operation.
+
+### Additional Debug Result (Cooling-Mode Constraint)
+- Added `Q_evap_total >= 0` constraint in zoned NTU copy to prevent heating-mode solutions.
+- Continuation sweep outcome (R134a, Tamb 10..45 C, current bounds):
+  - Converged + positive NTU COP at 10, 15, 20 C.
+  - Non-converged or infeasible for 25 C and above.
+
+### Evaporator Bound Test (Tsp-50 to Tsp)
+- Tested NTU continuation with evaporator bounds expanded to `(-70 C, -20 C)`.
+- Result unchanged versus prior run:
+  - Converged/positive at Tamb: 10, 15, 20 C
+  - Failed at Tamb >= 25 C (maxIterations/infeasible)
+- Conclusion: high-ambient non-convergence is not resolved by widening evaporator temperature bounds alone.
+
+## Session Breadcrumb (2026-03-09, Evap-vs-Setpoint Coding)
+- Updated active overlay scripts to compute evaporator bounds from cold storage setpoint:
+  - `evaporator_temperature = (Tsp-35, Tsp)` from `cold_storage_setpoint_c`.
+  - Files:
+    - `run_plr_cold_storage_r134a_plr_copy_overlay.py`
+    - `run_plr_cold_storage_r1234zee_plr_copy_overlay.py`
+- Updated NTU copy model APIs to support setpoint-based evaporator bounds directly:
+  - New args in `set_specifications`:
+    - `cold_storage_setpoint`
+    - `evap_offset_bounds`
+  - Files:
+    - `vapor_compression_plr_hx_ntu_copy.py`
+    - `vapor_compression_plr_hx_ntu_zoned_copy.py`
+- Verified mapping example:
+  - `cold_storage_setpoint=-20`, `evap_offset_bounds=(-50,0)` => bounds `(-70, -20) C`.
+
+## Session Breadcrumb (2026-03-09, HX1D Copy Created)
+- Added new PLR copy with 1D heat exchangers:
+  - `vapor_compression_plr_hx1d_copy.py`
+- Core model changes on copy only:
+  - Replaced evaporator and condenser with `HeatExchanger1D`
+  - Countercurrent flow pattern
+  - Explicit finite elements (constructor arg, default 8)
+  - Fixed geometry and distributed `heat_transfer_coefficient[t,x]`
+  - Refrigerant property package retained as Helmholtz two-phase-capable package
+  - `EnergyBalanceType.enthalpyTotal` on both HX sides
+  - PLR remains post-correction (`COP_part = PLF * COP_full`)
+- Boundary conventions in copy:
+  - Evaporator air inlet fixed to cold-storage setpoint (default `-20 C`)
+  - Condenser air inlet follows ambient input
+- Smoke build/spec check:
+  - Model constructs and accepts specs, with finite elements applied
+  - Reported `DOF = -1` in current quick check (not yet tuned to converged run)
+
+## Session Breadcrumb (2026-03-09, HX1D Datasheet Anchors Updated)
+- User-specified equipment references are now the explicit anchors for HX1D copy defaults:
+  - Condenser reference:
+    - Bitzer/Buffalo Trident `HX-518-1` (`HVB-2-4R-4P`)
+    - Source: `https://www.bitzer.de/shared_media/documentation/hx-518-1-au.pdf`
+  - Evaporator reference:
+    - Norlake Split-Pak sheet (`NASJ125RL4` / `WL6A094SDAS`)
+    - Source: `https://norlake.com/wp-content/uploads/2020/07/nasj125rl4.pdf`
+- Active default anchors in `vapor_compression_plr_hx1d_copy.py`:
+  - `finite_elements=4`
+  - Evaporator: `area=6.0 m^2`, `length=1.11 m`, `U=80 W/m^2-K`, `air_flow=31 mol/s`
+  - Condenser: `area=100.0 m^2`, `length=1.914 m`, `U=90 W/m^2-K`, `air_flow=356 mol/s`
+- Notes:
+  - Values are first-pass engineering anchors for initialization/stability and can be refined
+    after steady-state convergence is robust across ambient sweep points.
+
+## Session Breadcrumb (2026-03-09, HX1D Explicit Scaling Applied)
+- Applied explicit HX1D scaling in:
+  - `vapor_compression_plr_hx1d_copy.py`
+- Added `_apply_recommended_scaling()` and called it:
+  - after flowsheet/constraint build
+  - in `set_specifications()` before `calculate_scaling_factors`
+- Scaling targets implemented:
+  - Pressure vars/constraints: `1e-6`
+  - Enthalpy vars: `1e-5`
+  - Temperature vars/constraints: `1e-2`
+  - Heat/work vars/constraints: `1e-4`
+  - Mass flow vars: `1`
+  - COP var/constraint: `1`
+- Spot-check results after scaling (R134a, high-side `(500, 2000)` kPa):
+  - `Tamb=15 C`: non-converged (`infeasible`)
+  - `Tamb=45 C`: non-converged (`infeasible`)
+- Interpretation:
+  - Scaling is active and reduces generic scaling warnings, but convergence still requires
+    manifold relaxation/continuation around pressure and approach constraints.
+
+## Session Breadcrumb (2026-03-09, New IDAES Lumped-Capacitance Copy)
+- Added new copy model:
+  - `vapor_compression_plr_hx_lc_copy.py`
+- Implemented from PLR structure with coil-only swap:
+  - evaporator -> `HeatExchangerLumpedCapacitance`
+  - condenser -> `HeatExchangerLumpedCapacitance`
+  - compressor/valve/PLR post-correction kept aligned with PLR logic.
+- Added LC/HX config parameters:
+  - `UA_evap_hot`, `UA_evap_cold`, `UA_cond_hot`, `UA_cond_cold`
+  - `wall_heat_capacity_evap`, `wall_heat_capacity_cond`
+  - wall temperature initialization params
+- Applied resistance-addition style default UA split:
+  - evap: hot=640 W/K, cold=1920 W/K
+  - cond: hot=36000 W/K, cold=12000 W/K
+- Good-news checkpoint:
+  - Model now constructs successfully with `HeatExchangerLumpedCapacitance`.
+  - `flow_pattern` integration fixed.
+  - DOF after specifications is now `0` (closed model).
+- Current status:
+  - Ambient smoke sweep (`10,15,25,35,45 C`) still non-converged.
+  - Repeated dominant residuals are at condenser LC equations:
+    - `delta_temperature_in_equation`
+    - `heat_transfer_equation`
+    - `wall_temperature_eq`
+    - `condenser.cold_side.material_balances[CO2]`
