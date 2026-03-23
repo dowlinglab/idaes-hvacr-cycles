@@ -89,7 +89,13 @@ def run_step0(out_dir: Path, stamp: str) -> tuple[Path, Path]:
     return scaffold_path, status_path
 
 
-def run_step6(out_dir: Path, stamp: str, status_path: Path) -> tuple[Path, Path, Path]:
+def run_step6(
+    out_dir: Path,
+    stamp: str,
+    status_path: Path,
+    isotherm_csv: Path | None = None,
+    isotherm_label: str = "Isotherm 70C",
+) -> tuple[Path, Path, Path]:
     """
     Purpose
     -------
@@ -101,6 +107,10 @@ def run_step6(out_dir: Path, stamp: str, status_path: Path) -> tuple[Path, Path,
     stamp : str [YYYYMMDD]
     status_path : Path [filesystem path]
         Existing layer status JSON to update.
+    isotherm_csv : Path | None [filesystem path]
+        Optional single isotherm CSV with columns `P_bar`, `h_kJkg`, `phase_flag`.
+    isotherm_label : str [unitless]
+        Legend label for the optional isotherm overlay.
 
     Outputs
     -------
@@ -152,6 +162,20 @@ def run_step6(out_dir: Path, stamp: str, status_path: Path) -> tuple[Path, Path,
         ax.plot(hq, d5_ok["P_bar"], color="#6a4c93", lw=0.7, alpha=0.45)
     ax.plot([], [], color="#6a4c93", lw=1.0, alpha=0.7, label="Quality lines x=0.1..0.9")
 
+    if isotherm_csv is not None:
+        iso = pd.read_csv(isotherm_csv)
+        dv = iso[iso["phase_flag"] == "vapor"]
+        dc = iso[iso["phase_flag"] == "two_phase_connector"]
+        dl = iso[iso["phase_flag"] == "liquid"]
+        iso_color = "#1f1f1f"
+        if len(dv):
+            ax.plot(dv["h_kJkg"], dv["P_bar"], color=iso_color, lw=1.3)
+        if len(dc):
+            ax.plot(dc["h_kJkg"], dc["P_bar"], color=iso_color, lw=1.3, linestyle="--")
+        if len(dl):
+            ax.plot(dl["h_kJkg"], dl["P_bar"], color=iso_color, lw=1.3)
+        ax.plot([], [], color=iso_color, lw=1.3, label=isotherm_label)
+
     ax.legend(loc="lower right", fontsize=8)
     ax.set_title("R515B P-h Diagram (Pseudo-pure Honeywell-style composite)")
     fig.tight_layout()
@@ -175,6 +199,8 @@ def run_step6(out_dir: Path, stamp: str, status_path: Path) -> tuple[Path, Path,
         "axis_limits": {"h_kJkg": [150.0, 500.0], "p_bar": [1.0, 35.0]},
         "log_pressure_axis": True,
     }
+    if isotherm_csv is not None:
+        manifest["inputs"].append(str(isotherm_csv))
     manifest_path = out_dir / f"ph_layer6_manifest_{stamp}.json"
     with manifest_path.open("w") as f:
         json.dump(manifest, f, indent=2)
@@ -196,6 +222,8 @@ def run_step6(out_dir: Path, stamp: str, status_path: Path) -> tuple[Path, Path,
             "Quality lines x=0.1..0.9",
         ],
     }
+    if isotherm_csv is not None:
+        status["layer6_summary"]["legend"].append(isotherm_label)
     with status_path.open("w") as f:
         json.dump(status, f, indent=2)
 
@@ -237,6 +265,8 @@ def main() -> None:
     parser.add_argument("--out-dir", default="diagnostics/plots")
     parser.add_argument("--stamp", default=datetime.now().strftime("%Y%m%d"))
     parser.add_argument("--step", choices=["0", "6"], default="0")
+    parser.add_argument("--isotherm-csv", default="")
+    parser.add_argument("--isotherm-label", default="Isotherm 70C")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -248,7 +278,14 @@ def main() -> None:
         return
 
     status_path = out_dir / f"ph_layer_status_{stamp}.json"
-    png_path, pdf_path, manifest_path = run_step6(out_dir, stamp, status_path)
+    iso_csv = Path(args.isotherm_csv) if str(args.isotherm_csv).strip() else None
+    png_path, pdf_path, manifest_path = run_step6(
+        out_dir,
+        stamp,
+        status_path,
+        isotherm_csv=iso_csv,
+        isotherm_label=str(args.isotherm_label),
+    )
     print(f"layer6_png={png_path}")
     print(f"layer6_pdf={pdf_path}")
     print(f"layer6_manifest={manifest_path}")

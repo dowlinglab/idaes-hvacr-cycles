@@ -808,10 +808,9 @@ class SimpleVaporCompressionCyclePLRHX0DCond3:
         self._t_evap_sat_c = float(evap_sat_temperature)
         self._t_cond_sat_c = float(t_cond_sat_c)
         p_low_sat = CP.PropsSI("P", "T", self._t_evap_sat_c + C_TO_K, "Q", 1, self.cp_fluid_name)
-        p_high_sat = CP.PropsSI("P", "T", self._t_cond_sat_c + C_TO_K, "Q", 0, self.cp_fluid_name)
         fs.P_low_target.set_value(float(p_low_sat))
-        fs.P_high_target.set_value(float(p_high_sat))
-        fs.compressor.outlet.pressure[0].fix(float(p_high_sat))
+        # Let solver choose high-side pressure within bounds/manifold constraints.
+        fs.compressor.outlet.pressure[0].unfix()
         fs.P_high_target_constraint.deactivate()
         fs.P_high_ds_in.deactivate()
         fs.P_high_cond_in.deactivate()

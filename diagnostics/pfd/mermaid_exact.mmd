@@ -1,0 +1,4 @@
+flowchart LR
+  E["EVAP"] --> C["COMP"] --> DS["DS"] --> CO["COND"] --> SC["SC"] --> V["VALVE"] --> E
+  AIN["Ambient air in"] --> SC --> CO --> DS --> AOUT["Exhaust air"]
+  SIN["Cold-space air in"] --> E --> SOUT["Cold-space air out"]

@@ -814,36 +814,7 @@ def main() -> None:
     ax.set_ylabel("Pressure [bar]")
     ax.grid(True, which="both", alpha=0.30)
 
-    # Pseudo-pure dome boundaries + fill
-    pbar = sat_df["P_kPa"].to_numpy(dtype=float) * 1.0e-2
-    hf = sat_df["h_l_kJkg"].to_numpy(dtype=float)
-    hg = sat_df["h_v_kJkg"].to_numpy(dtype=float)
-    ax.fill_betweenx(pbar, hf, hg, color="#f4d35e", alpha=0.18, label="Two-phase region")
-    ax.plot(hf, pbar, color="#0b4f6c", lw=2.0, label="Sat. liquid boundary")
-    ax.plot(hg, pbar, color="#c44536", lw=2.0, label="Sat. vapor boundary")
-    # Computed cap from saturation trend extrapolation (Delta h -> 0).
-    cap = _compute_dome_cap_from_saturation(pbar, hf, hg, n_fit=8)
-    if cap is not None and cap["p_cap_bar"] <= float(args.Pmax_bar):
-        i_top = int(np.argmax(pbar))
-        ax.plot(
-            [hf[i_top], cap["h_cap_kJkg"]],
-            [pbar[i_top], cap["p_cap_bar"]],
-            color="#8d6e63",
-            lw=1.2,
-        )
-        ax.plot(
-            [hg[i_top], cap["h_cap_kJkg"]],
-            [pbar[i_top], cap["p_cap_bar"]],
-            color="#8d6e63",
-            lw=1.2,
-            label="Computed dome cap",
-        )
-
-    # quality lines
-    for q in np.arange(0.1, 1.0, 0.1):
-        hq = (1.0 - q) * hf + q * hg
-        ax.plot(hq, pbar, color="#6a4c93", lw=0.7, alpha=0.45)
-    ax.plot([], [], color="#6a4c93", lw=1.0, alpha=0.7, label="Quality lines x=0.1..0.9")
+    # User-directed debug mode: plot only the requested isotherm overlay, not the dome.
 
     all_iso_rows = []
     for i, t_c in enumerate(temps):
@@ -896,8 +867,8 @@ def main() -> None:
         if i == 0:
             iso_df.to_csv(out_iso_csv, index=False)
 
-    ax.set_title("R515B P-h Dome with Pseudo-pure Isotherm Overlays")
-    ax.legend(loc="lower right", fontsize=7, ncol=2)
+    ax.set_title("R515B P-h Isotherm Overlay")
+    ax.legend(loc="lower right", fontsize=7)
     fig.tight_layout()
     fig.savefig(out_fig, bbox_inches="tight")
 

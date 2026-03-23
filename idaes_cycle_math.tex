@@ -1,0 +1,247 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{cite}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\title{Mathematical Documentation of the IDAES Vapor-Compression Model}
+\author{Implementation documentation for \texttt{idaes-hvacr-cycles}}
+\date{Repo state summarized on 2026-03-23}
+
+\begin{document}
+\maketitle
+
+\section{Purpose and Scope}
+This document summarizes the mathematics implemented for the IDAES-based vapor-compression models in \texttt{vapor\_compression.py}, \texttt{vapor\_compression\_plr.py}, and \texttt{vapor\_compression\_plr\_hx\_idaes\_ntu.py}. The code uses the IDAES pure-component Helmholtz property package for refrigerant thermodynamics and builds increasingly specialized cycle models:
+\begin{enumerate}
+\item a base pure-fluid vapor-compression cycle,
+\item a part-load-ratio (PLR) version that keeps thermodynamics at a normalized reference flow and applies PLR as a post-correction,
+\item an IDAES \texttt{HeatExchangerNTU} copy intended to reproduce the frozen non-IDAES epsilon--NTU baseline.
+\end{enumerate}
+
+\section{Cycle Topology}
+The cycle contains four refrigerant-side units:
+\begin{equation}
+\text{evaporator} \rightarrow \text{compressor} \rightarrow \text{condenser} \rightarrow \text{expansion valve} \rightarrow \text{evaporator}.
+\end{equation}
+The base and PLR models use \texttt{Heater} blocks for evaporator and condenser, an IDAES \texttt{Compressor}, and an adiabatic \texttt{PressureChanger} as the expansion valve. The NTU copy replaces the two heater-style heat exchangers with \texttt{HeatExchangerNTU} blocks and introduces explicit air-side streams.
+
+\section{Thermodynamic States}
+The refrigerant is treated as a pure fluid using the IDAES Helmholtz package \cite{idaes_helmholtz}. The code supports either:
+\begin{enumerate}
+\item pressure--enthalpy (\texttt{PH}) state variables, or
+\item temperature--pressure--quality (\texttt{TPX})-style variables.
+\end{enumerate}
+For engineering discussion it is convenient to label the refrigerant states as
+\begin{align}
+1 &: \text{evaporator outlet / compressor inlet}, \\
+2 &: \text{compressor outlet / condenser inlet}, \\
+3 &: \text{condenser outlet / valve inlet}, \\
+4 &: \text{valve outlet / evaporator inlet}.
+\end{align}
+
+\section{Base Vapor-Compression Equations}
+The repository normalizes refrigerant mass flow to
+\begin{equation}
+\dot{m}_{\mathrm{ref}} = 1~\mathrm{kg\,s^{-1}}
+\end{equation}
+whenever the objective is COP comparison rather than capacity prediction.
+
+\subsection{Compressor}
+The compressor is modeled with isentropic efficiency
+\begin{equation}
+\eta_{\mathrm{is}}
+=
+\frac{h_{2s}-h_1}{h_2-h_1},
+\end{equation}
+or equivalently
+\begin{equation}
+h_2 = h_1 + \frac{h_{2s}-h_1}{\eta_{\mathrm{is}}}.
+\end{equation}
+The repository default target is
+\begin{equation}
+\eta_{\mathrm{is}} = 0.75.
+\end{equation}
+Mechanical work is therefore
+\begin{equation}
+\dot{W}_{\mathrm{comp}} = \dot{m}_{\mathrm{ref}}(h_2-h_1).
+\end{equation}
+
+\subsection{Evaporator and Condenser}
+In the base heater-style cycle, the evaporator and condenser are represented by heat addition and heat rejection:
+\begin{align}
+\dot{Q}_{\mathrm{evap}} &= \dot{m}_{\mathrm{ref}}(h_1-h_4), \\
+\dot{Q}_{\mathrm{cond}} &= \dot{m}_{\mathrm{ref}}(h_2-h_3).
+\end{align}
+
+\subsection{Expansion Valve}
+The expansion valve is adiabatic and modeled as isenthalpic:
+\begin{equation}
+h_4 = h_3.
+\end{equation}
+
+\subsection{Cycle COP}
+The model introduces an explicit COP variable constrained by
+\begin{equation}
+\mathrm{COP} \cdot \dot{W}_{\mathrm{comp}} = \dot{Q}_{\mathrm{evap}},
+\end{equation}
+so that
+\begin{equation}
+\mathrm{COP} = \frac{\dot{Q}_{\mathrm{evap}}}{\dot{W}_{\mathrm{comp}}}.
+\end{equation}
+This variable can either be computed after a feasibility solve or activated with an optimization objective that maximizes COP.
+
+\section{Operational Constraints Added in the Repo}
+The repository adds several physically motivated closure constraints around the IDAES unit models.
+
+\subsection{Superheat and Subcooling}
+At the evaporator outlet,
+\begin{equation}
+T_1 \ge T_{\mathrm{sat},1} + \Delta T_{\mathrm{sh}},
+\end{equation}
+and at the condenser outlet,
+\begin{equation}
+T_3 \le T_{\mathrm{sat},3} - \Delta T_{\mathrm{sc}}.
+\end{equation}
+The active default values used repeatedly in initialization and tests are
+\begin{equation}
+\Delta T_{\mathrm{sh}} = 3~\mathrm{K},
+\qquad
+\Delta T_{\mathrm{sc}} = 3~\mathrm{K}.
+\end{equation}
+
+\subsection{Condenser Ambient Approach}
+When ambient coupling is enabled, the condenser saturation temperature is constrained by
+\begin{equation}
+T_{\mathrm{cond,sat}} = T_{\mathrm{amb}} + \Delta T_{\mathrm{app}}.
+\end{equation}
+
+\subsection{Vapor-only Compressor Outlet}
+To prevent nonphysical wet compression, the code applies
+\begin{equation}
+T_2 \ge T_{\mathrm{sat},2}.
+\end{equation}
+
+\subsection{Pressure-level Formulation}
+To improve robustness, the repository also supports explicit low- and high-side pressure variables:
+\begin{equation}
+P_{\mathrm{low}}, \qquad P_{\mathrm{high}}.
+\end{equation}
+When activated, the refrigerant-side connections are tied to these pressure levels:
+\begin{align}
+P_4 &= P_1 = P_{\mathrm{low}}, \\
+P_2 &= P_3 = P_{\mathrm{high}}.
+\end{align}
+If saturation temperatures are specified, the corresponding pressure targets are generated from refrigerant saturation properties:
+\begin{equation}
+P_{\mathrm{low}} = P_{\mathrm{sat}}(T_{\mathrm{evap,sat}}),
+\qquad
+P_{\mathrm{high}} = P_{\mathrm{sat}}(T_{\mathrm{cond,sat}}).
+\end{equation}
+
+\section{PLR Formulation}
+The key modeling decision in this repository is that PLR does not directly rescale the refrigerant thermodynamic equations. Instead, the cycle is solved at the normalized reference flow, and PLR is applied only as a post-correction to COP.
+
+\subsection{Part-load Factor}
+The implemented part-load factor relation is
+\begin{equation}
+\mathrm{PLF} = 1 - C_D(1-\mathrm{PLR}),
+\end{equation}
+with clipping to the interval $[0,1]$. Here:
+\begin{align}
+\mathrm{PLR} &: \text{part-load ratio}, \\
+C_D &: \text{cyclic degradation coefficient}.
+\end{align}
+
+\subsection{Part-load COP}
+The repository uses
+\begin{equation}
+\mathrm{COP}_{\mathrm{part}} = \mathrm{PLF}\,\mathrm{COP}_{\mathrm{full}}.
+\end{equation}
+This is explicitly documented in the code and project context as a post-correction-only treatment. The full-load thermodynamic cycle itself remains on the reference flow basis.
+
+\section{Cold-storage Boundary Policy}
+For the current cold-storage studies, the repository records an active boundary policy of
+\begin{align}
+T_{\mathrm{evap,sat}} &\in [T_{\mathrm{cold,sp}} - 10^\circ\mathrm{C},\; T_{\mathrm{cold,sp}} - 8^\circ\mathrm{C}], \\
+T_{\mathrm{cond,sat}} &\in [T_{\mathrm{amb}} + 8^\circ\mathrm{C},\; T_{\mathrm{amb}} + 10^\circ\mathrm{C}].
+\end{align}
+In the current NTU copy implementation, midpoint saturation temperatures are used to generate pressure targets:
+\begin{align}
+T_{\mathrm{evap,sat,target}} &= \frac{T_{\mathrm{evap,lo}} + T_{\mathrm{evap,hi}}}{2}, \\
+T_{\mathrm{cond,sat,target}} &= \frac{T_{\mathrm{cond,lo}} + T_{\mathrm{cond,hi}}}{2}.
+\end{align}
+
+\section{IDAES NTU Heat-exchanger Copy}
+The file \texttt{vapor\_compression\_plr\_hx\_idaes\_ntu.py} replaces the heater-style evaporator and condenser with explicit two-stream \texttt{HeatExchangerNTU} blocks.
+
+\subsection{NTU Relations}
+For a standard effectiveness--NTU model,
+\begin{equation}
+\mathrm{NTU} = \frac{UA}{C_{\min}},
+\qquad
+\varepsilon = \frac{\dot{Q}}{\dot{Q}_{\max}},
+\qquad
+\dot{Q}_{\max} = C_{\min}(T_{h,\mathrm{in}} - T_{c,\mathrm{in}}).
+\end{equation}
+In the current repo copy, the area is fixed to unity and the heat-transfer coefficient is fixed to the user-specified total UA, so that effectively
+\begin{equation}
+UA = U \cdot A = U \cdot 1 = U.
+\end{equation}
+
+\subsection{Phase-change-dominant Simplification}
+To mimic the frozen non-IDAES epsilon--NTU baseline, the NTU copy adds the simplified phase-change-dominant relation
+\begin{equation}
+\varepsilon = 1 - e^{-\mathrm{NTU}}
+\end{equation}
+for both evaporator and condenser. This is the $C_r \to 0$ limit of standard counterflow effectiveness theory. In the actual initialization sequence, effectiveness is first fixed and the correlation is activated later during specification and solve.
+
+\subsection{Air-side Closure}
+The NTU copy explicitly fixes air-side inlet composition, pressure, temperature, and molar flow for both heat exchangers. That gives the refrigerant-air coupled balances needed for UA-driven heat transfer:
+\begin{align}
+\dot{Q}_{\mathrm{evap}} &= \dot{m}_{\mathrm{air,evap}}(h_{\mathrm{air,out}} - h_{\mathrm{air,in}}), \\
+\dot{Q}_{\mathrm{cond}} &= \dot{m}_{\mathrm{air,cond}}(h_{\mathrm{air,out}} - h_{\mathrm{air,in}}),
+\end{align}
+while the refrigerant-side duties remain
+\begin{align}
+\dot{Q}_{\mathrm{evap}} &= \dot{m}_{\mathrm{ref}}(h_1-h_4), \\
+\dot{Q}_{\mathrm{cond}} &= \dot{m}_{\mathrm{ref}}(h_2-h_3).
+\end{align}
+
+\section{Initialization Strategy}
+The repository initializes the refrigerant states with CoolProp-based guesses. From chosen low- and high-side saturation temperatures,
+\begin{equation}
+P_{\mathrm{low,init}} = P_{\mathrm{sat}}(T_{\mathrm{low}}),
+\qquad
+P_{\mathrm{high,init}} = P_{\mathrm{sat}}(T_{\mathrm{high}}),
+\end{equation}
+and uses superheated or subcooled enthalpy estimates to seed the four principal states. Those seeds are then loaded into the IDAES model before the full nonlinear solve.
+
+\section{What Was Built in This Repo}
+From the code and project context, the repository work around the IDAES cycle can be summarized mathematically as follows:
+\begin{enumerate}
+\item a base pure-fluid IDAES vapor-compression cycle with explicit COP optimization;
+\item a PLR extension in which the cycle equations remain at normalized full-load flow and PLR enters only through $\mathrm{COP}_{\mathrm{part}}=\mathrm{PLF}\,\mathrm{COP}_{\mathrm{full}}$;
+\item additional superheat, subcool, saturation-temperature, pressure-level, and vapor-only constraints to improve physical realism and numerical stability;
+\item an NTU-based IDAES copy with explicit refrigerant-air heat exchangers and a phase-change-dominant effectiveness approximation intended to match the frozen non-IDAES epsilon--NTU reference path.
+\end{enumerate}
+
+\section{Current Implementation Status}
+The project context in the repository records that the heater-style cycle is the established baseline, while the copy-based IDAES heat-exchanger variants, including the NTU version, are still under stabilization for ambient sweeps. In other words, the math is in place, but the IDAES HX variants are still being tuned so they reproduce the frozen baseline robustly over the full cold-storage sweep range.
+
+\begin{thebibliography}{9}
+\bibitem{idaes_helmholtz}
+IDAES Project, ``Pure Component Helmholtz EoS,'' IDAES documentation. [Online]. Available: \url{https://idaes-pse.readthedocs.io/en/stable/reference_guides/model_libraries/generic/property_models/helmholtz.html}. Accessed: 2026-03-23.
+
+\bibitem{idaes_framework}
+D. C. Miller, M. Zamarripa, J. Eslick, \emph{et al.}, ``Next generation multi-scale process systems engineering framework,'' in \emph{Computer Aided Chemical Engineering}, vol. 44, 2018, pp. 2209--2214, doi: 10.1016/B978-0-444-64241-7.50363-3.
+
+\bibitem{ahri_plr}
+AHRI, ``ANSI/AHRI Standard 210/240,'' part-load factor relation for cyclic degradation methods. [Online]. Available: \url{https://www.scribd.com/document/48105165/AHRI-Standard-210-240}. Accessed: 2026-03-23.
+
+\bibitem{bell2018}
+I. H. Bell, A. Jaeger, and C. Breitkopf, ``A theoretically based departure function for multi-fluid mixture models,'' \emph{Fluid Phase Equilibria}, vol. 463, pp. 87--108, 2018, doi: 10.1016/j.fluid.2018.04.015.
+\end{thebibliography}
+
+\end{document}

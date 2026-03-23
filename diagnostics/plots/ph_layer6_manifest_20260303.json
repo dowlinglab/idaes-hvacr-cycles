@@ -1,8 +1,9 @@
 {
-  "generated_at_utc": "2026-03-04T00:06:34.003036+00:00",
-  "git_hash_short": "af2ae3d",
+  "generated_at_utc": "2026-03-10T17:17:52.742323+00:00",
+  "git_hash_short": "2ddc769",
   "inputs": [
-    "diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv"
+    "diagnostics/plots/ph_layer5_pseudopure_overlay_20260303.csv",
+    "diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv"
   ],
   "outputs": [
     "diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png",

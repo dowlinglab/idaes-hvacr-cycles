@@ -73,3 +73,40 @@ Do not call `set_specifications()` with only a debug flag, since that can silent
 
 ### Reporting Rule
 - For this stage, output PFD + stream table for one ambient point before generating overlay figures.
+
+## Addendum (2026-03-10 Late): Why Air Temperatures Look Nonphysical
+
+### Confirmed Status
+- Current cond3 IDAES copy remains non-converged at one-point test (`R134a`, `Tamb=20 C`).
+- Structural closure is currently square (`DOF=0`) after pressure/area cleanup.
+
+### What Is Happening
+1. The run fails before constraints are satisfied globally.
+2. Reported values like `226.85 C` air outlet are failed-iterate values, not physical solutions.
+3. Subcooler can appear to "pump" pressure at failed iterate because pressure constraints are not yet driven to zero residual.
+
+### Key Residual Evidence
+- `subcooler_hot_dp0` residual is large (order `1e6 Pa`).
+- `P_high_comp_out` residual is large (order `1e5 Pa`).
+- `subcooler.heat_transfer_equation` and delta-T residuals remain nonzero.
+- SC duty at failed state is effectively zero (`Q_hot = Q_cold = 0`).
+
+### Practical Meaning
+- The model is not predicting hot air physically; it is numerically stalled.
+- Next work should prioritize numerical stabilization of HX delta-T/LMTD path and initialization continuation.
+
+## Addendum (2026-03-10 Late): SC Mass/Energy Balance Snapshot (Failed Iterate)
+
+### Reported SC Balance Values
+- Hot side: `m_dot=1.0 kg/s`, `h_in=241722.392 J/kg`, `h_out=236722.392 J/kg`, `Q_hot=0 W`.
+- Cold side: `N_dot=356 mol/s`, `h_in=-250 J/mol`, `h_out=-250 J/mol`, `Q_cold=0 W`.
+- Cold-side temperatures: `T_in=20.0 C`, `T_out=226.85 C` (nonphysical in this failed state).
+
+### Manual Check Results
+- Hot-side energy residual: `m_dot*(h_out-h_in)+Q_hot = -5000 W`.
+- Cold-side energy residual (algebraic): `N_dot*(h_out-h_in)+Q_cold = 0`.
+- Cross-side duty closure: `Q_hot + Q_cold = 0` (trivial at failed iterate).
+
+### Interpretation
+- SC is not physically solved yet.
+- Current values are for diagnostic debugging only and should not be used as cycle performance outputs.

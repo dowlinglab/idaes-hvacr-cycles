@@ -173,6 +173,24 @@ Stabilize an IDAES-based PLR+HX implementation that reproduces the frozen non-ID
 22. Once one-point convergence is obtained, perform warm-start continuation across ambient (`10..45 C`) and then validate `% of Carnot` against the frozen non-IDAES reference trend.
 
 ## Change Log (Chronological)
+- 2026-03-10: Added copy-ready markdown table for the current 70 C pseudo-pure isotherm values:
+  `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm_table_20260310.md`
+  with all vapor, connector, and liquid points formatted for slide use.
+- 2026-03-10: Extended `plot_ph_r515b_layers.py` STEP-6 renderer with optional single-isotherm overlay support via `--isotherm-csv` and `--isotherm-label`.
+- 2026-03-10: Regenerated the pseudo-pure Honeywell-style p-H chart with the current 70 C pseudo-pure isotherm overlaid:
+  `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`,
+  `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`,
+  `diagnostics/plots/ph_layer6_manifest_20260303.json`.
+- 2026-03-10: Re-generated the previously approved pseudo-pure Honeywell-style p-H chart figure from the existing Layer-5 pseudo-pure overlay artifact using `plot_ph_r515b_layers.py --step 6 --stamp 20260303`.
+- 2026-03-10: Refreshed chart-style artifacts with pseudo-pure saturation boundaries, two-phase fill, and quality lines `x=0.1..0.9`:
+  `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.png`,
+  `diagnostics/plots/ph_layer6_final_honeywell_style_20260303.pdf`,
+  `diagnostics/plots/ph_layer6_manifest_20260303.json`.
+- 2026-03-10: Updated `scripts/plot_pseudopure_isodiagram.py` to user-directed debug mode that removes all dome plotting elements (fill, sat boundaries, quality lines, computed cap) and renders only the requested isotherm overlay segments plus connector.
+- 2026-03-10: Regenerated overlay-only artifacts with the project conda interpreter:
+  `diagnostics/pseudopure_iso/ph_dome_pseudopure_iso_overlays.png`,
+  `diagnostics/pseudopure_iso/T_70C_pseudopure_isotherm.csv`,
+  `diagnostics/pseudopure_iso/T_70C_selection_trace_20260310.csv`.
 - 2026-03-10: Added root-level frozen non-IDAES PLR+HX alias `vapor_compression_plr_hx.py` from epsilon-NTU copy path.
 - 2026-03-10: Added `for_review/` directory for non-active scripts/artifacts and updated `.gitignore` to ignore `for_review/`.
 - 2026-03-10: Added and tested copy-based IDAES PLR+HX variants:
@@ -1913,3 +1931,67 @@ Stabilize an IDAES-based PLR+HX implementation that reproduces the frozen non-ID
   - inspect which constraints are active inside `initialize()` solve calls,
   - avoid solving full model while temporary fixed anchors are still active,
   - then rerun one-point table/PFD before any ambient sweep.
+
+## Session Breadcrumb (2026-03-10, Late-Night Residual Diagnosis)
+
+### Requested Focus
+- Explain persistent nonphysical air temperatures and SC pressure jump in `vapor_compression_plr_hx_0d_cond3.py` after closure patches.
+
+### Structural Status (Current)
+- `subcooler_hot_dp0` is active.
+- Built-in `subcooler.hot_side.pressure_balance[0]` is deactivated to avoid duplicate zero-dP equations.
+- Condenser-zone areas are fixed; `cond_area_sum` deactivated to avoid redundancy.
+- Current model-level DOF at set-spec is `0`.
+- IDAES structural diagnostics no longer show structural singularity; remaining warning is potential evaluation errors in HX LMTD equations.
+
+### One-Point Debug Outcome (R134a, Tamb=20 C)
+- Solve status: not converged (`solver_exception`).
+- Key residuals at failed iterate:
+  - `subcooler_hot_dp0` residual: `+1.281e6 Pa`
+  - `P_high_comp_out` residual: `-4.517e5 Pa`
+  - `subcooler.heat_transfer_equation[0]` residual: `-175.87`
+  - `subcooler.delta_temperature_out_equation[0]` residual: `+21.05`
+- SC duty at failed iterate:
+  - `Q_hot = 0 W`, `Q_cold = 0 W` (effectively no SC heat transfer occurring in failed state)
+
+### Interpretation Captured
+- The displayed air temperatures (e.g., `226.85 C`) are not physical predictions.
+- They are unconverged iterate values after NLP failure; constraints tying pressure and HX delta-T are not satisfied.
+- Pressure jump `SC_in -> SC_out` is also an unconverged artifact, not a solved thermodynamic result.
+
+### Next Debug Target
+- Focus on numerical robustness of HX equations (delta-T/LMTD behavior and initialization path), not additional structural closure edits.
+
+## Session Breadcrumb (2026-03-10, SC Balance Snapshot)
+
+### User Request
+- Provide explicit mass and energy balances around Subcooler (SC) hot and cold sides using latest one-point run.
+
+### One-Point Context
+- Fluid: `R134a`
+- Ambient: `20 C`
+- Solver status: non-converged (`solver_exception`)
+
+### SC State Values at Failed Iterate
+- Hot side (refrigerant):
+  - `m_dot_hot = 1.0 kg/s`
+  - `h_hot_in = 241722.392 J/kg`
+  - `h_hot_out = 236722.392 J/kg`
+  - `Q_hot = 0.0 W`
+- Cold side (air/flue gas package):
+  - `N_dot_cold = 356.0 mol/s`
+  - `h_cold_in = -250.0 J/mol`
+  - `h_cold_out = -250.0 J/mol`
+  - `Q_cold = 0.0 W`
+  - `T_cold_in = 20.0 C`
+  - `T_cold_out = 226.85 C`
+
+### Balance Interpretation
+- Hot-side mass continuity holds (`m_in = m_out`).
+- Hot-side energy balance is not satisfied at this failed iterate:
+  `m_dot*(h_out-h_in)+Q_hot = -5000 W`.
+- Cold-side energy equation is algebraically zero with current values, but the paired temperature/enthalpy state is nonphysical due to failed convergence.
+- Cross-side duty closure (`Q_hot + Q_cold = 0`) is trivially zero here, but not representative of a physical solved SC duty.
+
+### Practical Note
+- These are failed-iterate diagnostics, not converged performance outputs.

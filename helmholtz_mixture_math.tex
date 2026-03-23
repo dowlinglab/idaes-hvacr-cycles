@@ -1,0 +1,280 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{cite}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\title{Mathematical Documentation of the Helmholtz Mixture Model}
+\author{Implementation documentation for \texttt{idaes-hvacr-cycles}}
+\date{Repo state summarized on 2026-03-23}
+
+\begin{document}
+\maketitle
+
+\section{Purpose and Scope}
+This document records the mathematics implemented in the repository for the binary Helmholtz mixture workflow built around \texttt{linear\_model\_codex.py}, \texttt{mixture\_pseudo\_dome.py}, and \texttt{mixture\_vle\_true\_reference.py}. The active binary pair is R1234ze(E)/R227ea, used as an R515B-style surrogate. The implementation combines pure-component IDAES Helmholtz JSON data with composition-dependent reducing functions and a Bell-style binary departure term. The same thermodynamic core is then used in three ways:
+\begin{enumerate}
+\item single-state pressure/enthalpy evaluation,
+\item fixed-composition pseudo-dome calculations,
+\item true binary VLE solves based on pressure and chemical-potential equality.
+\end{enumerate}
+
+\section{State Definition and Composition Conversion}
+The point-query interface uses temperature $T$, mass density $\rho$, and mass fraction $w_1$ of component 1. The mass fraction is converted to mole fraction before thermodynamic evaluation:
+\begin{equation}
+x_1 = \frac{w_1/M_1}{w_1/M_1 + (1-w_1)/M_2},
+\qquad
+x_2 = 1-x_1,
+\end{equation}
+where $M_i$ is molecular weight. The mixture molecular weight and molar density are then
+\begin{equation}
+\bar{M} = x_1 M_1 + x_2 M_2,
+\qquad
+\rho_{\mathrm{mol}} = \frac{\rho}{\bar{M}}.
+\end{equation}
+
+\section{Helmholtz Formulation}
+The dimensionless Helmholtz free energy is written in the usual form
+\begin{equation}
+\alpha = \alpha^0 + \alpha^r,
+\end{equation}
+with ideal contribution $\alpha^0$ and residual contribution $\alpha^r$ \cite{idaes_helmholtz,lemmon2004}. For the implemented binary mixture, the reduced variables are
+\begin{equation}
+\tau = \frac{T_{\mathrm{red}}}{T},
+\qquad
+\delta = \rho_{\mathrm{mol}} v_{\mathrm{red}},
+\end{equation}
+where $T_{\mathrm{red}}$ and $v_{\mathrm{red}}$ depend on composition.
+
+\subsection{Bell-style Reducing Functions}
+The reducing functions used in the code are
+\begin{align}
+\theta_T &= \frac{x_1+x_2}{\beta_T^2 x_1 + x_2}, \\
+\theta_v &= \frac{x_1+x_2}{\beta_v^2 x_1 + x_2},
+\end{align}
+with cross parameters
+\begin{align}
+T_{c,12} &= \beta_T \gamma_T \sqrt{T_{c,1} T_{c,2}}, \\
+v_{c,12} &= \beta_v \gamma_v
+\frac{\left(v_{c,1}^{1/3}+v_{c,2}^{1/3}\right)^3}{8}.
+\end{align}
+The mixture reducing functions are
+\begin{align}
+T_{\mathrm{red}}
+&= x_1^2 T_{c,1} + x_2^2 T_{c,2}
++ 2 x_1 x_2 \theta_T T_{c,12}, \\
+v_{\mathrm{red}}
+&= x_1^2 v_{c,1} + x_2^2 v_{c,2}
++ 2 x_1 x_2 \theta_v v_{c,12}.
+\end{align}
+For the active R1234ze(E)/R227ea pair, the repository uses
+\begin{equation}
+\beta_T = 1.001247,\quad
+\beta_v = 0.99290,\quad
+\gamma_T = 0.989180,\quad
+\gamma_v = 1.001581.
+\end{equation}
+
+\subsection{Pure-fluid Mapping into Mixture Reduced Coordinates}
+Each pure-fluid Helmholtz model is evaluated at mapped reduced coordinates
+\begin{equation}
+\tau_i = \frac{T_{c,i}}{T_{\mathrm{red}}}\tau,
+\qquad
+\delta_i = \frac{\rho_{\mathrm{red}}}{\rho_{c,i}} \delta,
+\qquad
+\rho_{\mathrm{red}} = \frac{1}{v_{\mathrm{red}}}.
+\end{equation}
+The implementation assumes fixed composition during differentiation with respect to $\tau$ and $\delta$, so the chain-rule mapping is
+\begin{equation}
+\frac{\partial \alpha_i}{\partial \tau}
+=
+\frac{\partial \alpha_i}{\partial \tau_i}
+\frac{T_{c,i}}{T_{\mathrm{red}}},
+\qquad
+\frac{\partial \alpha_i}{\partial \delta}
+=
+\frac{\partial \alpha_i}{\partial \delta_i}
+\frac{\rho_{\mathrm{red}}}{\rho_{c,i}}.
+\end{equation}
+
+\subsection{Residual Departure Term}
+The binary departure term is implemented as
+\begin{equation}
+\alpha_{\mathrm{dep}}^r
+= x_1 x_2 \sum_k n_k \tau^{t_k} \delta^{d_k}
+\exp\!\left(-\delta^{\ell_k}\right),
+\end{equation}
+with coefficient set
+\begin{align}
+(n_k,t_k,d_k,\ell_k) \in
+\{&
+(-0.057178,1.290298,1,1), \nonumber\\
+&(0.031318,0.038796,2,1), \nonumber\\
+&(-0.027496,2.640532,3,1)\}.
+\end{align}
+The code also evaluates
+\begin{equation}
+\frac{\partial \alpha_{\mathrm{dep}}^r}{\partial \tau},
+\qquad
+\frac{\partial \alpha_{\mathrm{dep}}^r}{\partial \delta}
+\end{equation}
+analytically.
+
+\section{Mixture Helmholtz Energy Used in the Code}
+At fixed composition, the implemented ideal and residual terms are
+\begin{align}
+\alpha_{\mathrm{mix}}^0 &= x_1 \alpha_1^0(\tau_1,\delta_1) + x_2 \alpha_2^0(\tau_2,\delta_2), \\
+\alpha_{\mathrm{mix}}^r &= x_1 \alpha_1^r(\tau_1,\delta_1) + x_2 \alpha_2^r(\tau_2,\delta_2)
++ \alpha_{\mathrm{dep}}^r.
+\end{align}
+Whenever full mixture thermodynamic functions are assembled, the ideal mixing entropy term is added explicitly:
+\begin{equation}
+\alpha_{\mathrm{mix}}
+= \alpha_{\mathrm{mix}}^0 + \alpha_{\mathrm{mix}}^r
++ x_1 \ln x_1 + x_2 \ln x_2.
+\end{equation}
+The repository clips $x_i$ away from exactly $0$ and $1$ to avoid $\ln 0$ singularities.
+
+\section{Thermodynamic Properties}
+\subsection{Pressure and Compressibility}
+The compressibility factor and pressure follow the standard Helmholtz identities
+\begin{equation}
+Z = 1 + \delta \left(\frac{\partial \alpha_{\mathrm{mix}}^r}{\partial \delta}\right)_{T,\bm{x}},
+\end{equation}
+\begin{equation}
+p = \rho_{\mathrm{mol}} R T Z.
+\end{equation}
+
+\subsection{Enthalpy}
+The code uses an explicit Lemmon-style assembly for mixture enthalpy. First,
+\begin{equation}
+\frac{h^0}{RT}
+= 1 + x_1 \tau_1 \left(\frac{\partial \alpha_1^0}{\partial \tau_1}\right)
++ x_2 \tau_2 \left(\frac{\partial \alpha_2^0}{\partial \tau_2}\right).
+\end{equation}
+Then the total mixture enthalpy is
+\begin{equation}
+\frac{h}{RT}
+=
+\frac{h^0}{RT}
++ \tau \left(\frac{\partial \alpha_{\mathrm{mix}}^r}{\partial \tau}\right)_{\,\delta,\bm{x}}
++ \delta \left(\frac{\partial \alpha_{\mathrm{mix}}^r}{\partial \delta}\right)_{\,\tau,\bm{x}}.
+\end{equation}
+The single-state API returns $p$ in kPa and $h$ in kJ/kg.
+
+\subsection{Other Table-1 Properties}
+The extended evaluator in \texttt{compute\_table1\_properties} also uses
+\begin{align}
+\frac{u}{RT} &= \left(\frac{h^0}{RT}-1\right) + \tau \alpha_{\tau}^r, \\
+\frac{s}{R} &= \left(\frac{h^0}{RT} - \alpha^0_{\mathrm{mix}} -1\right)
++ \tau \alpha_{\tau}^r - \alpha^r_{\mathrm{mix}}.
+\end{align}
+The code computes
+\begin{align}
+\frac{c_v}{R} &= \frac{c_v^0}{R} - \tau^2 \alpha_{\tau\tau}^r, \\
+\frac{c_p}{R} &=
+\frac{c_v}{R}
++ \frac{\left(1+\delta \alpha_{\delta}^r - \delta \tau \alpha_{\tau\delta}^r\right)^2}
+{1 + 2\delta \alpha_{\delta}^r + \delta^2 \alpha_{\delta\delta}^r},
+\end{align}
+and the speed of sound from
+\begin{equation}
+w^2 =
+\frac{c_p}{c_v}
+\left(1 + 2\delta \alpha_{\delta}^r + \delta^2 \alpha_{\delta\delta}^r\right)
+\frac{RT}{\bar{M}}.
+\end{equation}
+In the current implementation, the second residual derivatives entering $c_v$, $c_p$, and $w$ are evaluated numerically in the Table-1 helper.
+
+\section{Fugacity and Chemical Potentials}
+For the true-VLE branch, the code evaluates fugacity via an analytic derivative of $n\alpha^r$ at fixed $T$, $V$, and the other mole number:
+\begin{equation}
+f_i = x_i \rho_{\mathrm{mol}} R T
+\exp\!\left(\frac{\partial (n\alpha^r)}{\partial n_i}\right)_{T,V,n_{j \ne i}}.
+\end{equation}
+The fugacity coefficient and chemical potential are then
+\begin{equation}
+\phi_i = \frac{f_i}{x_i p},
+\qquad
+\mu_i = RT \ln f_i.
+\end{equation}
+The implemented binary derivatives are
+\begin{align}
+\frac{\partial (n\alpha^r)}{\partial n_1}
+&=
+\alpha^r
++ \rho_{\mathrm{mol}}\frac{\partial \alpha^r}{\partial \rho_{\mathrm{mol}}}
++ x_2 \frac{\partial \alpha^r}{\partial x_1}, \\
+\frac{\partial (n\alpha^r)}{\partial n_2}
+&=
+\alpha^r
++ \rho_{\mathrm{mol}}\frac{\partial \alpha^r}{\partial \rho_{\mathrm{mol}}}
+- x_1 \frac{\partial \alpha^r}{\partial x_1}.
+\end{align}
+The composition derivative uses analytic derivatives of the reducing functions plus the departure term.
+
+\section{Pseudo-dome Formulation}
+The pseudo-dome workflow is intentionally not a true VLE model. It holds composition fixed in both phases and solves for liquid and vapor densities at a specified temperature from
+\begin{equation}
+r_1 = p_l - p_v = 0,
+\qquad
+r_2 = g_l - g_v = 0,
+\end{equation}
+where the Gibbs molar energy is assembled as
+\begin{equation}
+g = RT \left( 1 + \alpha_{\mathrm{mix}} + \delta \alpha_{\delta}^r \right).
+\end{equation}
+This gives an exploratory fixed-composition saturation-like envelope, but it does not split liquid and vapor compositions and therefore is not a rigorous mixture phase-equilibrium calculation.
+
+\section{True Binary VLE Formulation}
+The rigorous binary VLE branch solves bubble and dew points by enforcing
+\begin{align}
+p^{(l)} - p^{(v)} &= 0, \\
+\mu_1^{(l)} - \mu_1^{(v)} &= 0, \\
+\mu_2^{(l)} - \mu_2^{(v)} &= 0.
+\end{align}
+For a specified overall composition $z_1$, the repository uses
+\begin{itemize}
+\item bubble calculations with $x_1^{(l)} = z_1$ and unknown vapor composition,
+\item dew calculations with $y_1^{(v)} = z_1$ and unknown liquid composition.
+\end{itemize}
+The solver variables are transformed with logistic maps so that densities and compositions remain in physically meaningful bounds during nonlinear solves.
+
+\section{Implementation Assumptions and Current Limits}
+The current implementation reflects the following choices made in the repository:
+\begin{enumerate}
+\item the active binary interaction parameters are hard-coded for R1234ze(E)/R227ea;
+\item differentiation with respect to $\tau$ and $\delta$ is performed at fixed composition;
+\item ideal mixing entropy is included explicitly through $x_i \ln x_i$ terms;
+\item the pseudo-dome path is exploratory only and is not true mixture VLE;
+\item the true-VLE branch is more rigorous, but repository notes still flag robustness issues near some low-temperature points.
+\end{enumerate}
+
+\section{What Was Built in This Repo}
+In practical terms, the repository work around this model produced:
+\begin{enumerate}
+\item a single-state $p$-$h$ query interface built from IDAES Helmholtz JSON data and Bell-style mixture rules;
+\item a fixed-composition pseudo-dome workflow for quick exploratory envelope plots;
+\item a true-VLE reference branch using pressure and chemical-potential equality;
+\item a wider Table-1-style property evaluator returning $Z$, $p$, $h$, $u$, $s$, $c_v$, $c_p$, sound speed, fugacities, fugacity coefficients, and chemical potentials.
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{idaes_helmholtz}
+IDAES Project, ``Pure Component Helmholtz EoS,'' IDAES documentation. [Online]. Available: \url{https://idaes-pse.readthedocs.io/en/stable/reference_guides/model_libraries/generic/property_models/helmholtz.html}. Accessed: 2026-03-23.
+
+\bibitem{bell2018}
+I. H. Bell, A. Jaeger, and C. Breitkopf, ``A theoretically based departure function for multi-fluid mixture models,'' \emph{Fluid Phase Equilibria}, vol. 463, pp. 87--108, 2018, doi: 10.1016/j.fluid.2018.04.015.
+
+\bibitem{lemmon2004}
+E. W. Lemmon and R. T. Jacobsen, ``Equations of state for mixtures of R-32, R-125, R-134a, R-143a, and R-152a,'' \emph{J. Phys. Chem. Ref. Data}, vol. 33, no. 2, pp. 593--620, 2004, doi: 10.1063/1.1649997.
+
+\bibitem{tillner1998}
+R. Tillner-Roth and D. G. Friend, ``A Helmholtz free energy formulation of the thermodynamic properties of the mixture (water + ammonia),'' \emph{J. Phys. Chem. Ref. Data}, vol. 27, no. 1, pp. 45--61, 1998.
+
+\bibitem{idaes_framework}
+D. C. Miller, M. Zamarripa, J. Eslick, \emph{et al.}, ``Next generation multi-scale process systems engineering framework,'' in \emph{Computer Aided Chemical Engineering}, vol. 44, 2018, pp. 2209--2214, doi: 10.1016/B978-0-444-64241-7.50363-3.
+\end{thebibliography}
+
+\end{document}
