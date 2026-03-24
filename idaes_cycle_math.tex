@@ -173,6 +173,116 @@ T_{\mathrm{evap,sat,target}} &= \frac{T_{\mathrm{evap,lo}} + T_{\mathrm{evap,hi}
 T_{\mathrm{cond,sat,target}} &= \frac{T_{\mathrm{cond,lo}} + T_{\mathrm{cond,hi}}}{2}.
 \end{align}
 
+\section{Lumped Heater-block HX Closure}
+For the meeting-preparation path discussed in the repository, the recommended first IDAES replication of the non-IDAES lumped baseline keeps the \texttt{Heater} blocks in \texttt{vapor\_compression\_plr.py} and changes only the heat-exchanger closure equations. In this interpretation, the refrigerant-side units remain heater-like control volumes, while lumped air-side parameters are introduced algebraically to determine refrigerant heat duty from total UA.
+
+\subsection{Closure Philosophy}
+The main modeling change is to replace target-based outlet constraints such as
+\begin{equation}
+T_1 \ge T_{\mathrm{sat},1} + \Delta T_{\mathrm{sh}},
+\qquad
+T_3 \le T_{\mathrm{sat},3} - \Delta T_{\mathrm{sc}},
+\end{equation}
+with lumped duty equations of the form
+\begin{equation}
+\dot{Q} = \varepsilon C_{\mathrm{air}} \Delta T_{\mathrm{drive}}.
+\end{equation}
+Under this closure, superheat and subcooling become computed outputs rather than active solve constraints for the first lumped build.
+
+\subsection{Evaporator Lumped Equations}
+Introduce air-side parameters
+\begin{equation}
+\dot{m}_{\mathrm{air,e}}, \qquad
+c_{p,\mathrm{air,e}}, \qquad
+T_{\mathrm{air,e,in}}, \qquad
+UA_{\mathrm{evap}}.
+\end{equation}
+Then define the air-side capacity rate
+\begin{equation}
+C_{\mathrm{air,e}} = \dot{m}_{\mathrm{air,e}} c_{p,\mathrm{air,e}},
+\end{equation}
+the evaporator NTU
+\begin{equation}
+\mathrm{NTU}_{\mathrm{e}} = \frac{UA_{\mathrm{evap}}}{C_{\mathrm{air,e}}},
+\end{equation}
+and the phase-change-dominant effectiveness
+\begin{equation}
+\varepsilon_{\mathrm{e}} = 1 - e^{-\mathrm{NTU}_{\mathrm{e}}}.
+\end{equation}
+Using evaporator saturation temperature inferred from refrigerant pressure,
+\begin{equation}
+T_{\mathrm{sat,e}} = T_{\mathrm{sat}}(P_{\mathrm{low}}),
+\end{equation}
+the lumped evaporator duty is written as
+\begin{equation}
+\dot{Q}_{\mathrm{evap}} =
+\varepsilon_{\mathrm{e}} C_{\mathrm{air,e}}
+\left(T_{\mathrm{air,e,in}} - T_{\mathrm{sat,e}}\right).
+\end{equation}
+This duty is then tied directly to the refrigerant-side \texttt{Heater} block:
+\begin{equation}
+\dot{Q}_{\mathrm{heater,evap}} = \dot{Q}_{\mathrm{evap}}.
+\end{equation}
+
+\subsection{Condenser Lumped Equations}
+Similarly introduce
+\begin{equation}
+\dot{m}_{\mathrm{air,c}}, \qquad
+c_{p,\mathrm{air,c}}, \qquad
+T_{\mathrm{air,c,in}}, \qquad
+UA_{\mathrm{cond}}.
+\end{equation}
+Define
+\begin{equation}
+C_{\mathrm{air,c}} = \dot{m}_{\mathrm{air,c}} c_{p,\mathrm{air,c}},
+\qquad
+\mathrm{NTU}_{\mathrm{c}} = \frac{UA_{\mathrm{cond}}}{C_{\mathrm{air,c}}},
+\qquad
+\varepsilon_{\mathrm{c}} = 1 - e^{-\mathrm{NTU}_{\mathrm{c}}}.
+\end{equation}
+Using condensing saturation temperature inferred from refrigerant pressure,
+\begin{equation}
+T_{\mathrm{sat,c}} = T_{\mathrm{sat}}(P_{\mathrm{high}}),
+\end{equation}
+the condenser heat rejection is modeled as
+\begin{equation}
+\dot{Q}_{\mathrm{cond}} =
+\varepsilon_{\mathrm{c}} C_{\mathrm{air,c}}
+\left(T_{\mathrm{sat,c}} - T_{\mathrm{air,c,in}}\right).
+\end{equation}
+Because the condenser removes heat from the refrigerant, the \texttt{Heater}
+sign convention is
+\begin{equation}
+\dot{Q}_{\mathrm{heater,cond}} = -\dot{Q}_{\mathrm{cond}}.
+\end{equation}
+
+\subsection{Optional Physical Guards}
+The non-IDAES lumped model also applies simple physical caps so the refrigerant
+outlet does not cross the entering air temperature. In a heater-block IDAES
+version, the same idea can be represented as loose outlet-temperature guards such as
+\begin{equation}
+T_1 \le T_{\mathrm{air,e,in}} - 0.5~\mathrm{K},
+\qquad
+T_3 \ge T_{\mathrm{air,c,in}} + 0.5~\mathrm{K},
+\end{equation}
+or by equivalent enthalpy bounds. These guards are optional for the first build,
+but they mimic the clipping behavior used in the non-IDAES lumped reference.
+
+\subsection{Quantities Reported After the Solve}
+Under the lumped heater-block closure, actual superheat and subcooling should be
+computed after the solve:
+\begin{equation}
+\Delta T_{\mathrm{sh,actual}} =
+\max\!\left(0, T_1 - T_{\mathrm{sat},1}\right),
+\end{equation}
+\begin{equation}
+\Delta T_{\mathrm{sc,actual}} =
+\max\!\left(0, T_{\mathrm{sat},3} - T_3\right).
+\end{equation}
+These are diagnostic outputs used to compare against the frozen non-IDAES
+baseline, rather than primary algebraic closure equations in the first lumped
+IDAES replication.
+
 \section{IDAES NTU Heat-exchanger Copy}
 The file \texttt{vapor\_compression\_plr\_hx\_idaes\_ntu.py} replaces the heater-style evaporator and condenser with explicit two-stream \texttt{HeatExchangerNTU} blocks.
 

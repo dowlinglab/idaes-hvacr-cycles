@@ -18,6 +18,8 @@ Stabilize an IDAES-based PLR+HX implementation that reproduces the frozen non-ID
 - Added pure-fluid saturation module (`helmholtz_saturation.py`) and wrapper CLI (`scripts/plot_ph_dome.py`) for dome CSV/figure generation.
 
 ## Key Technical Decisions
+- 2026-03-23: For lumped-HX sizing research, pulled an official Carrier evaporator catalogue with model-level capacities and airflows (`Evaporator MT-LT catalogue`, Carrier India) plus Carrier Tenor supermarket condenser family data. Current status: evaporator side has enough published rating information for a first back-calculated `UA` estimate at a catalog point; condenser side still needs a model-level rating sheet or equivalent detailed product data before a comparably specific `UA` back-calculation can be trusted.
+- 2026-03-23: For industry-meeting preparation, clarified the recommended IDAES `Heater`-block lumped-HX closure strategy: retain the refrigerant-side cycle topology from `vapor_compression_plr.py`, deactivate SH/SC/approach target constraints for the first lumped build, and replace those closures with evaporator/condenser UA-driven duty equations of the form `Q = epsilon * C_air * DeltaT_drive` using the phase-change-dominant approximation `epsilon = 1 - exp(-UA/C_air)`; compute actual SH/SC only as post-solve diagnostics.
 - 2026-03-10: Froze the non-IDAES PLR+HX epsilon-NTU baseline as the reference behavior target for subsequent IDAES replication work.
 - 2026-03-10: Active boundary policy for cold-storage runs:
   `T_evap_sat` derived from `T_cold_sp-10` to `T_cold_sp-8` bounds and
