@@ -213,6 +213,20 @@ class SimpleVaporCompressionCyclePLR:
         self.model.fs.P_high = Var(initialize=1200e3, units=pyunits.Pa, bounds=(100e3, 5000e3))
         self.model.fs.P_low_target = Param(initialize=200e3, units=pyunits.Pa, mutable=True)
         self.model.fs.P_high_target = Param(initialize=1200e3, units=pyunits.Pa, mutable=True)
+        
+        
+        ## Heat duty variables
+        self.model.fs.q_evap_lumped = Var(
+            initialize = 5000.0,
+            bounds = (0,1e7),
+            units = pyunits.W,
+            doc = "Lumped evaporator heat gain")
+        
+        self.model.fs.q_cond_lumped = Var(
+            initialize = 7000.0,
+            bounds =(0,1e7),
+            units = pyunits.W,
+            doc = "Lumped condenser heat rejection")
 
         @self.model.fs.Constraint(doc="Low-side pressure target")
         def P_low_target_constraint(b):
@@ -253,6 +267,53 @@ class SimpleVaporCompressionCyclePLR:
         @self.model.fs.Constraint(doc="Valve inlet pressure equals P_high")
         def P_high_valve_in(b):
             return b.expansion_valve.inlet.pressure[0] == b.P_high
+        
+        ## Adding lumped duty constraints (defined as two different constraints
+        # for easier de-bugging)
+        @self.model.fs.Constraint(doc = "Lumped evaporator UA-duty relation")
+        def evap_lumped_q_constraint(b):
+            return b.q_evap_lumped == b.eps_vap*b.C_air_evap*b.deltaT_evap_drive
+        
+        @self.model.fs.Constraint(doc = "Equate evaporator heat duty to lumped heat duty")
+        def evap_heat_duty_constraint(b):
+            return b.evaporator.heat_duty[0] == b.q_evap_lumped
+        
+        @self.model.fs.Constraint(doc = "Lumped condensor UA-duty relationship")
+        def cond_lumped_q_constraint(b):
+            return b.q.cond_lumped == b.eps_cond*b.C_air_cond*b.deltaT_cond_drive
+        
+        @self.model.fs.Constraint(doc = "Equate condenser heat duty to lumped heat duty")
+        def cond_heat_duty_constraint(b):
+            return b.condenser.heat_duty[0] == -b.q_evap_lumped
+        
+        
+        ## Adding expressions for evaporator and condenser NTU
+        
+        @self.model.fs.Expression(doc = "Evaporator NTU")
+        def NTU_evap(b):
+            return b.ua_evap/b.C_air_evap
+        @self.model.fs.Expression(doc = "Condenser NTU")
+        def NTU_cond(b):
+            return b.ua_cond/b.C_air_cond
+        
+        ## Adding expressions for evaporator and condensor effectiveness, no crossflow
+        @self.model.fs.Expression(doc = "Evaporator effectiveness, Cr ->0")
+        def eps_evap(b):
+            return 1.0- np.exp(-b.NTU_evap)
+        
+        @self.model.fs.Expression(doc = "Condenser effectiveness, Cr->0")
+        def eps_cond(b):
+            return 1.0-np.exp(-b.NTU_cond)
+        
+        ## Adding Driving-Temperature Expressions (delta T across each HX), we need this so
+        # heat exchanger duties can be approximated as Q~UA *f(driving temperature)
+        @self.model.fs.Expression(doc = "Evaporator driving temperature")
+        def deltaT_evap_drive(b):
+            return b.t_air_evap_in - b.evaporator.control_volume.properties_out[0].temperature_sat
+        
+        @self.model.fs.Expression(doc = "Condenser driving temperature")
+        def deltaT_cond_drive(b):
+            return b.condenser.control_volume.properties_out[0].temperature_sat - b.t_air_cond_in
 
         # Deactivate by default; activated in set_specifications when requested
         self.model.fs.P_low_target_constraint.deactivate()
@@ -265,6 +326,11 @@ class SimpleVaporCompressionCyclePLR:
         self.model.fs.P_high_cond_in.deactivate()
         self.model.fs.P_high_cond_out.deactivate()
         self.model.fs.P_high_valve_in.deactivate()
+        self.model.fs.evaporator.superheating_constraint.deactivate()
+        self.model.fs.evaporator.evap_sat_constraint.deactivate()
+        self.model.fs.condenser.subcooling_constraint.deactivate()
+        self.model.fs.condenser.approach_constraint.deactivate()
+        self.model.fs.compressor.vapor_constraint.deactivate()
 
         '''
         # This constraint is redundant with another constraint
@@ -500,9 +566,13 @@ class SimpleVaporCompressionCyclePLR:
                            superheating = 3, # degC
                            max_pressure_ratio = 4,
                            ambient_temperature = None, # degC
+                           cold_storage_temperature = None, #deg C
                            condenser_approach = None, # degC
                            evap_sat_temperature = None, # degC
+                           cold_storage_setpoint = None, #degC
                            debug_disable_arc_pressure_eq = False,
+                           UA_evap_total = None,
+                           UA_cond_total = None,
                            plr = None,
                            cd = None
                            ):
@@ -516,6 +586,23 @@ class SimpleVaporCompressionCyclePLR:
         if cd is not None:
             assert 0.0 <= cd <= 1.0, "CD must be in [0, 1]"
             self.cd = cd
+            
+        if cold_storage_temperature is not None:
+            self.model.fs.t_air_evap_in.set_value(cold_storage_setpoint + C_to_K)
+        else:
+            self.model.fs.t_air_evap_in.set_value(C_to_K - 20.0)
+            
+        if ambient_temperature is not None:
+            self.model.fs.t_air_cond_in.set_value(ambient_temperature + C_to_K)
+        else:
+            self.model.fs.t_air_cond_in.set_value(C_to_K + 10.0)
+        
+        if UA_evap_total is not None:
+            self.model.fs.ua_evap.set_value(float(UA_evap_total))
+        if UA_cond_total is not None:
+            self.model.fs.ua_cond.set_value(float(UA_cond_total))
+        
+            
         self.model.fs.plr.set_value(self.plr)
         self.model.fs.cd.set_value(self.cd)
         # assert not (Tsat_constraints and bound_vapor_frac), "Cannot have both Tsat constraints and vapor fraction bounds"
