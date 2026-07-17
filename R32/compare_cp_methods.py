@@ -2,11 +2,16 @@
 Compare p-h and T-s diagrams for R-32 across several Cp / critical-property
 methods, benchmarked against the Linde datasheet.
 
-Four data series are shown on each diagram:
-    1. Linde datasheet   (reference; from NIST REFPROP 9.0)
-    2. NIST WebBook      (Shomate coefficients) -> IDAES-style PR property model
-    3. GCGP             (Fathya's Shomate coefficients)
-    4. SPGP             (Tina's Shomate coefficients)
+Nine data series are shown on each diagram:
+    1. Linde datasheet         (reference; from NIST REFPROP 9.0)
+    2. NIST                     (NIST Shomate + NIST Pc/Tc)
+    3. GCGP                     (GCGP Shomate + GCGP Pc/Tc)
+    4. SPGP                     (SPGP Shomate + SPGP predicted Tc)
+    5. SPGP_NIST               (SPGP Shomate + NIST Tc = 351.3 K)
+    6. SPGP_Fathya             (SPGP Shomate + GCGP Tc = 355.354 K)
+    7. SPGP_Shomate_GCGP       (GCGP Shomate + SPGP Tc = 400.898 K)
+    8. SPGP_NIST_crit_prps     (SPGP Shomate + NIST Pc/Tc pair)
+    9. SPGP_Fathya_crit_prps   (SPGP Shomate + GCGP Pc/Tc pair)
 
 Each method supplies only its ROW DATA: Pc [bar], Tc [K], and Shomate A..E.
 Shared/fixed: R-32 molar mass, gas constant, the Linde saturation table
@@ -19,7 +24,7 @@ Model per method:
     2. Peng-Robinson cubic EOS departure h and s (Poling Table 6-3).
     3. Shomate ideal-gas Cp integration (t = T/1000).
 
-Author: Claude (Anthropic)
+Author: Shilpa Narasimhan and Claude AI
 Date Created: 07/07/2026
 QA/testing: Shilpa Narasimhan
 """
@@ -96,6 +101,16 @@ METHODS = [
     {"name": "GCGP", "Pc_bar": 50.730,  "Tc": 355.354,
      "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
     {"name": "SPGP", "Pc_bar": 50.8106, "Tc": 400.898,
+     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
+    {"name": "SPGP_NIST", "Pc_bar": 50.8106, "Tc": 351.3,
+     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
+    {"name": "SPGP_Fathya", "Pc_bar": 50.8106, "Tc": 355.354,
+     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
+    {"name": "SPGP_Shomate_GCGP", "Pc_bar": 50.8106, "Tc": 400.898,
+     "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
+    {"name": "SPGP_NIST_crit_prps", "Pc_bar": 57.85, "Tc": 351.3,
+     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
+    {"name": "SPGP_Fathya_crit_prps", "Pc_bar": 50.730, "Tc": 355.354,
      "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
 ]
 
@@ -265,7 +280,8 @@ report_errors(methods)
 # Plot 1: p-h diagram (4 curves)
 # =============================================================================
 
-colors = ["tab:blue", "tab:green", "tab:red", "tab:purple", "tab:orange"]
+colors = ["tab:blue", "tab:green", "tab:red", "tab:purple", "tab:orange",
+          "tab:brown", "tab:pink", "tab:gray"]
 
 plt.figure()
 # Linde reference (datasheet) as black dashed with markers
