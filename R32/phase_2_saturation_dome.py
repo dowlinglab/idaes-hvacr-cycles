@@ -192,13 +192,55 @@ def sat_point(p,T):
     return Psat, hl, hg, sl,sg
 
 ##############################################################################################
-#   Single-point test: confirm the saturation recipe at 0 deg C (NIST)
+#  Full saturation dome for all methods
 ##############################################################################################
 
 if __name__ == "__main__":
-    T0 = 273.15 # 0 deg C
-    Psat,hl,hg,sl,sg = sat_point(METHODS["NIST"],T0)
-    print("NIST saturated at 0 C:")
-    print(f"  Psat = {Psat/1e5:.3f} bar        (Linde ~ 8.13)")
-    print(f"  hl = {hl:.1f} J/mol   hg = {hg:.1f} J/mol   (raw, zero datum)")
-    print(f"  latent heat hg-hl = {(hg-hl)/MW/1000:.1f} kJ/kg   (Linde ~ 316)")
+    # Linde saturation: (T[C], Psat[bar], hl, hg [kJ/kg], sl, sg [kJ/kg/K])
+    LINDE_SAT = [
+        (-130, 0.001312,  -8.26, 448.77, -0.028, 3.165),
+        (-110, 0.014525,  23.20, 461.86,  0.178, 2.867),
+        (-90,  0.07556,   54.42, 474.61,  0.359, 2.653),
+        (-70,  0.36067,   85.66, 486.57,  0.520, 2.494),
+        (-50,  1.014,    117.22, 497.27,  0.668, 2.371),
+        (-30,  2.7344,   149.45, 506.27,  0.806, 2.274),
+        (-10,  5.8263,   182.76, 513.02,  0.937, 2.192),
+        (0,    8.131,    200.00, 515.30,  1.000, 2.154),
+        (10,   10.065,   217.74, 516.66,  1.063, 2.119),
+        (20,   14.746,   236.12, 516.90,  1.125, 2.083),
+        (30,   19.275,   255.32, 515.72,  1.188, 2.047),
+        (40,   24.783,   275.61, 512.71,  1.252, 2.009),
+        (50,   31.412,   297.49, 507.10,  1.318, 1.967),
+        (58,   37.635,   316.75, 499.82,  1.375, 1.928),
+        (62,   41.089,   327.30, 494.76,  1.405, 1.905),
+        (66,   44.793,   338.78, 488.26,  1.438, 1.879),
+        (70,   48.768,   351.73, 479.52,  1.474, 1.846),
+        (74,   53.046,   367.53, 466.41,  1.518, 1.803),
+        (76,   55.315,   378.03, 455.86,  1.547, 1.770),
+        (78,   57.697,   400.38, 428.90,  1.610, 1.691),
+    ]
+
+    def to_kJkg(x):          # J/mol -> kJ/kg  (works for h and s)
+        return x / MW / 1000.0
+
+    print(f"\n{'series':>7}{'P_MAPE%':>9}{'hl_MAE':>9}{'hg_MAE':>9}"
+          f"{'sl_MAE':>9}{'sg_MAE':>9}   (vs Linde)")
+    print("-" * 62)
+
+    for name, p in METHODS.items():
+        # IIR anchor at 0 deg C: sat. liquid -> h=200 kJ/kg, s=1.0 kJ/kg/K
+        _, hl0, _, sl0, _ = sat_point(p, 273.15)
+        h_off = 200.0 - to_kJkg(hl0)
+        s_off = 1.0 - to_kJkg(sl0)
+
+        Pe, hl_e, hg_e, sl_e, sg_e = [], [], [], [], []
+        for (TC, Pl, hl_lin, hg_lin, sl_lin, sg_lin) in LINDE_SAT:
+            Ps, hl, hg, sl, sg = sat_point(p, TC + 273.15)
+            Pe.append(abs(Ps/1e5 - Pl) / Pl * 100)
+            hl_e.append(abs(to_kJkg(hl) + h_off - hl_lin))
+            hg_e.append(abs(to_kJkg(hg) + h_off - hg_lin))
+            sl_e.append(abs(to_kJkg(sl) + s_off - sl_lin))
+            sg_e.append(abs(to_kJkg(sg) + s_off - sg_lin))
+
+        print(f"{name:>7}{np.mean(Pe):>9.2f}{np.mean(hl_e):>9.2f}"
+              f"{np.mean(hg_e):>9.2f}{np.mean(sl_e):>9.4f}{np.mean(sg_e):>9.4f}")
