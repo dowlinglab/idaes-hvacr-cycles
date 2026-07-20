@@ -42,28 +42,47 @@ from idaes.models.properties.modular_properties.phase_equil.forms import log_fug
 
 
 ##############################################################################################
-#Defining all the constants
+#           Defining all the constants
 ##############################################################################################
 R = 8.314 # Real gas constant, J/mol/K
-MW = 52.023e-03 # kg/mol Molar mass of CH₂F₂, from standard atomic weights
+MW = 52.024e-03 # kg/mol Molar mass of CH₂F₂, from standard atomic weights
 #(NIST WebBook: 52.024 g/mol).
 
 ## Defining all the properties 
+# "omega" = Pitzer acentric factor, computed per method from the Linde vapor
+# pressure at Tr = 0.7:  omega = -1 - log10(Psat(Tr=0.7) / Pc), using each
+# method's own Tc and Pc. Values: NIST 0.2769, GCGP 0.1711, SPGP -0.2741.
+# (Negative for SPGP because its Tc is far too high -> a symptom of bad
+#  critical properties, not a real acentric factor.)
 
 METHODS = {
-    "NIST": {"Pc": 57.82e5,  "Tc": 351.3,
+    "NIST": {"Pc": 57.82e5,  "Tc": 351.3,   "omega": 0.2769,
              "A": -6.098682, "B": 179.2200, "C": -122.3682, "D": 32.30207, "E": 0.491361},
-    "GCGP": {"Pc": 50.730e5, "Tc": 355.354,
+    "GCGP": {"Pc": 50.730e5, "Tc": 355.354, "omega": 0.1711,
              "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
-    "SPGP": {"Pc": 50.8106e5,"Tc": 400.898,
-             "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837, 
-            "E": -0.0000361638},
+    "SPGP": {"Pc": 50.8106e5,"Tc": 400.898, "omega": -0.2741,
+             "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  
+             "E": -0.0000361638},
 }
 
+##############################################################################################
+#           Build the IDAES generic-property configuration for parameters p from methods
+##############################################################################################
 
 
-
-
+def make_config(p):
+    ## Return which property methods + parameter values
+    return{
+        "components":{
+            "R32":{
+                "type": Component,
+                "cp_mol_ig_comp": NIST, # Shomate ideal-gas Cp
+                "enth_mol_ig_comp": NIST, # Shomate ideal-gas enthalpy
+                "entr_mol_ig_comp": NIST, # Shomate ideal-gas entropy
+                "pressure_sat_comp": NIST  # Antoine saturation pressure (init guess)
+            }
+        }
+    }
 
 
 
