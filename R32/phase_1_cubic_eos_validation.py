@@ -177,7 +177,7 @@ if __name__ == "__main__":
     print("-" * 58)
 
     z_idaes = {} # dictionary that stashes the IDAES-computed vapor Z for each method so you can use it after the loop.
-    z_van = 
+    z_van = {} # disctionary that stasges the vanilla python-based vapor Z for each method so you can use it after the loop
     for name, p in METHODS.items():
         m = ConcreteModel()
         m.fs = FlowsheetBlock(dynamic=False)
@@ -197,11 +197,20 @@ if __name__ == "__main__":
         zv = vanilla_z_vap(T_test, P_test, p["Tc"], p["Pc"], p["omega"])
         cpv = vanilla_cp_ideal(T_test, p["A"], p["B"], p["C"], p["D"], p["E"])
         z_idaes[name] = zi
+        z_van[name] = zv
         print(f"{name:>6}{zi:10.4f}{zv:11.4f}{zi-zv:9.4f}{cpi:11.3f}{cpv:11.3f}")
 
-    # NIST gate vs the actual hand-written code (pr_eos_lib)
+    # Per-method gate: IDAES cubic solver vs the vanilla property prediction
+    TOL = 1e-3
+    print()
+    all_pass = True
+    for name in METHODS:
+        dZ = abs(z_idaes[name] - z_van[name])
+        ok = dZ< TOL
+        all_pass &= ok ## Boolean AND on the truth table: &=
+        print(f"{name} gate: |dZ| = {dZ:.2e}  -> {'PASS' if ok else 'FAIL'}")
+    # Anchor: the vanilla helper reproduces the actual standalone code (NIST only)
     z_pr = pr.z_roots(T_test, P_test)[0][-1]
-    dZ = abs(z_idaes["NIST"] - z_pr)
-    print(f"\nNIST gate: Z_idaes = {z_idaes['NIST']:.4f}  "
-          f"pr_eos_lib Z_vap = {z_pr:.4f}  |dZ| = {dZ:.2e}")
-    print("GATE PASSED" if dZ < 1e-2 else "GATE FAILED")
+    print(f"\nHelper anchor (NIST): vanilla {z_van['NIST']:.4f} vs "
+          f"pr_eos_lib {z_pr:.4f}  |dZ| = {abs(z_van['NIST'] - z_pr):.2e}")
+    print("\nALL GATES PASSED" if all_pass else "\nSOME GATES FAILED")
