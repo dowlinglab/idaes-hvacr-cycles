@@ -44,7 +44,20 @@ from idaes.models.properties.modular_properties.phase_equil.forms import log_fug
 ##############################################################################################
 #Defining all the constants
 ##############################################################################################
+R = 8.314 # Real gas constant, J/mol/K
+MW = 52.023e-03 # kg/mol Molar mass of CH₂F₂, from standard atomic weights
+#(NIST WebBook: 52.024 g/mol).
 
+## Defining all the properties 
+
+METHODS = {
+    "NIST": {"Pc": 57.82e5,  "Tc": 351.3,
+             "A": -6.098682, "B": 179.2200, "C": -122.3682, "D": 32.30207, "E": 0.491361},
+    "GCGP": {"Pc": 50.730e5, "Tc": 355.354,
+             "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
+    "SPGP": {"Pc": 50.8106e5,"Tc": 400.898,
+             "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
+}
 
 
 
