@@ -38,6 +38,18 @@ from idaes.models.properties.modular_properties.phase_equil.bubble_dew import Lo
 #  like R-32, both are just the saturation point. It's where boiling/condensing happens.
 from idaes.models.properties.modular_properties.phase_equil.forms import log_fugacity
 # the rule for equilibrium: liquid and vapor coexist when their fugacities are equal
-#  (ln f_liquid = ln f_vapor). This is the same fugacity condition we talked about — 
-# it's when the two phases balance.
+#  (ln f_liquid = ln f_vapor). 
+
+
+##############################################################################################
+#Defining all the constants
+##############################################################################################
+
+
+
+
+
+
+
+
 
