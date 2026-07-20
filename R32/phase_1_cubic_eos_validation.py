@@ -22,7 +22,7 @@ from idaes.models.properties.modular_properties.base.generic_property import Gen
 ## Generic parameter block reads the configuration file provided as dict and builds all the
 ## thermodynamic property knowledge that will be used within IDAES
 from idaes.models.properties.modular_properties.state_definitions import FTPx
-## Tell IDAES which variables describe the thermodynamic state of each stream/point
+## Tell IDAES which variables describe the thermodynamic state of each stream       /point
 # F: Molar flow rate, T: Temperature, P = Pressure, x = mole fraction
 from idaes.models.properties.modular_properties.eos.ceos import Cubic, CubicType
 ## Type of equations of state, here we use cubic equations of state: Cubic
@@ -132,44 +132,76 @@ def make_config(p):
         "parameter_data": {"PR_kappa": {("R32", "R32"): 0.000}},
     }
 
+##############################################################################################
+#   Vanilla (hand-written) Peng-Robinson references, parameterized per method
+##############################################################################################
+# Same physics as pr_eos_lib.py, but taking Tc, Pc, omega, and the Shomate
+# coefficients as arguments so ONE function works for NIST, GCGP, and SPGP.
+# Verified against pr_eos_lib for NIST: Z_vap 0.876, Cp_ideal 42.455.
+
+def vanilla_z_vap(T, P, Tc, Pc, omega):
+    """Vapor-root compressibility Z from the PR cubic (largest real root)."""
+    kappa = 0.37464 + 1.54226*omega - 0.26992*omega**2
+    alpha = (1.0 + kappa*(1.0 - np.sqrt(T/Tc)))**2
+    a = 0.45724 * R**2 * Tc**2 * alpha / Pc
+    b = 0.07780 * R * Tc / Pc
+    A = a*P/(R*T)**2
+    B = b*P/(R*T)
+    coeffs = [1.0, -(1.0 - B), A - 2.0*B - 3.0*B**2, -(A*B - B**2 - B**3)]
+    roots = np.roots(coeffs)
+    real = roots[np.abs(roots.imag) < 1e-8].real
+    return max(real)
+
+def vanilla_cp_ideal(T, A, B, C, D, E):
+    """Shomate ideal-gas Cp [J/mol/K], t = T/1000."""
+    t = T/1000.0
+    return A + B*t + C*t**2 + D*t**3 + E/t**2
+
 
 ##############################################################################################
-#          Phase-0 test: Build + solve each method at 0 degrees of freedom
+#   Phase-1 validation: IDAES cubic-EoS Z (and Cp) vs the vanilla PR code
 ##############################################################################################
 
-if __name__ =="__main__":
+if __name__ == "__main__":
     from pyomo.environ import ConcreteModel, value
     from idaes.core import FlowsheetBlock
     from idaes.core.util.model_statistics import degrees_of_freedom
     from idaes.core.solvers import get_solver
+    import pr_eos_lib as pr   # NIST-only, hand-written reference (the "vanilla" code)
+    import idaes.logger as idaeslog
 
+    T_test, P_test = 293.15, 10e5   # 20 deg C, 10 bar
+
+    print(f"\n{'method':>6}{'Z_idaes':>10}{'Z_vanilla':>11}{'dZ':>9}"
+          f"{'Cp_idaes':>11}{'Cp_ideal':>11}")
+    print("-" * 58)
+
+    z_idaes = {} # dictionary that stashes the IDAES-computed vapor Z for each method so you can use it after the loop.
+    z_van = 
     for name, p in METHODS.items():
-        print("\n"+ "="*60)
-        print(f"METHOD: {name}")
-        print("="*60)
-    
         m = ConcreteModel()
-        m.fs = FlowsheetBlock(dynamic = False)
+        m.fs = FlowsheetBlock(dynamic=False)
         m.fs.properties = GenericParameterBlock(**make_config(p))
-
-        # one state block: R-32 at 20 deg C, 10 bar
-        m.fs.state = m.fs.properties.build_state_block([0], defined_state = True)
-        sb = m.fs.state[0]
-        sb.flow_mol.fix(1.0)
-        sb.mole_frac_comp["R32"].fix(1.0)
-        sb.temperature.fix(293.15)
-        sb.pressure.fix(10e05)
-
-        dof = degrees_of_freedom(m)
-        print(f"degrees of freedom (want 0): {dof}")
-
-        m.fs.state.initialize(outlvl=0)
+        m.fs.state = m.fs.properties.build_state_block([0], defined_state=True)
+        state_r32 = m.fs.state[0]
+        state_r32.flow_mol.fix(1.0)
+        state_r32.mole_frac_comp["R32"].fix(1.0)
+        state_r32.temperature.fix(T_test)
+        state_r32.pressure.fix(P_test)
+        assert degrees_of_freedom(m) == 0, f"{name}: DOF != 0"
+        m.fs.state.initialize(outlvl=idaeslog.WARNING)
         get_solver().solve(m)
 
-        print(f"  SOLVED")
-        print(f"  T = {value(sb.temperature):.2f} K   "
-              f"P = {value(sb.pressure)/1e5:.3f} bar")
-        print(f"  h = {value(sb.enth_mol):.2f} J/mol   "
-              f"s = {value(sb.entr_mol):.4f} J/mol/K")
-        for ph in m.fs.properties.phase_list:
-            print(f"    phase_frac[{ph}] = {value(sb.phase_frac[ph]):.4f}")
+        zi = value(state_r32.compress_fact_phase["Vap"])
+        cpi = value(state_r32.cp_mol_phase["Vap"])            # total (ideal + departure)
+        zv = vanilla_z_vap(T_test, P_test, p["Tc"], p["Pc"], p["omega"])
+        cpv = vanilla_cp_ideal(T_test, p["A"], p["B"], p["C"], p["D"], p["E"])
+        z_idaes[name] = zi
+        print(f"{name:>6}{zi:10.4f}{zv:11.4f}{zi-zv:9.4f}{cpi:11.3f}{cpv:11.3f}")
+
+    # NIST gate vs the actual hand-written code (pr_eos_lib)
+    z_pr = pr.z_roots(T_test, P_test)[0][-1]
+    dZ = abs(z_idaes["NIST"] - z_pr)
+    print(f"\nNIST gate: Z_idaes = {z_idaes['NIST']:.4f}  "
+          f"pr_eos_lib Z_vap = {z_pr:.4f}  |dZ| = {dZ:.2e}")
+    print("GATE PASSED" if dZ < 1e-2 else "GATE FAILED")
