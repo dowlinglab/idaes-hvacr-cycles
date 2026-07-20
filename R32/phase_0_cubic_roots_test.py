@@ -131,4 +131,43 @@ def make_config(p):
     }
 
 
+##############################################################################################
+#          Phase-0 test: Build + solve each method at 0 degrees of freedom
+##############################################################################################
 
+if __name__ =="__main__":
+    from pyomo.environ import ConcreteModel, value
+    from idaes.core import FlowsheetBlock
+    from idaes.core.util.model_statistics import degrees_of_freedom
+    from idaes.core.solvers import get_solver
+
+    for name, p in METHODS.items():
+        print("\n"+ "="*60)
+        print(f"METHOD: {name}")
+        print("="*60)
+    
+        m = ConcreteModel()
+        m.fs = FlowsheetBlock(dynamic = False)
+        m.fs.properties = GenericParameterBlock(**make_config(p))
+
+        # one state block: R-32 at 20 deg C, 10 bar
+        m.fs.state = m.fs.properties.build_state_block([0], defined_state = True)
+        sb = m.fs.state[0]
+        sb.flow_mol.fix(1.0)
+        sb.mole_frac_comp["R32"].fix(1.0)
+        sb.temperature.fix(293.15)
+        sb.pressure.fix(10e05)
+
+        dof = degrees_of_freedom(m)
+        print(f"degrees of freedom (want 0): {dof}")
+
+        m.fs.state.initialize(outlvl=0)
+        get_solver().solve(m)
+
+        print(f"  SOLVED")
+        print(f"  T = {value(sb.temperature):.2f} K   "
+              f"P = {value(sb.pressure)/1e5:.3f} bar")
+        print(f"  h = {value(sb.enth_mol):.2f} J/mol   "
+              f"s = {value(sb.entr_mol):.4f} J/mol/K")
+        for ph in m.fs.properties.phase_list:
+            print(f"    phase_frac[{ph}] = {value(sb.phase_frac[ph]):.4f}")
