@@ -9,6 +9,7 @@ from idaes.models.unit_models import (Heater, Turbine, Compressor,
 from idaes.core.solvers import get_solver
 from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core.util.scaling import calculate_scaling_factors
+from idaes.core.util.exceptions import InitializationError
 from pyomo.environ import ConcreteModel, value, Objective, SolverFactory, maximize, minimize, TransformationFactory, Param, Var
 from idaes.core.util.initialization import propagate_state
 from pyomo.network import Arc
@@ -114,6 +115,32 @@ class SimpleVaporCompressionCycle:
         # self.model.fs.evaporator_to_compressor_expanded.pressure_equality.deactivate()
         # self.model.fs.expansion_valve_to_evaporator_expanded.pressure_equality.deactivate()
         # self.model.fs.expansion_valve_to_evaporator_expanded.temperature_equality.deactivate()
+
+        # Phase 3b: same closed-loop redundancy as flow_mol_equality above, but for
+        # COMPOSITION instead of flow. R32 is pure, so mole_frac_comp["R32"] == 1
+        # everywhere, always -- it never changes across any unit. Each unit's own
+        # OUTLET state block carries a "sum_mole_frac_out" constraint enforcing that
+        # same trivial fact locally, on top of the 4 arc-level mole_frac_comp_equality
+        # constraints already tying composition together all the way around the
+        # closed loop. Going all the way around, that's one redundant equation per
+        # unit -- confirmed via DiagnosticsToolbox: overall model DOF was -4 after
+        # set_specifications(), and deactivating these 4 constraints (one per unit
+        # outlet) brings it to exactly 0. Unlike flow (only needs one arc broken),
+        # composition redundancy shows up locally at every unit's own outlet block,
+        # so all 4 need deactivating, not just one arc.
+        #
+        # CAVEAT: this deactivation does NOT reliably stick past initialize().
+        # Confirmed via diagnostic: each unit's own initialize() call reactivates
+        # its own properties_out sum_mole_frac_out as part of its internal
+        # bootstrapping, regardless of what we set here. The deactivation is
+        # re-asserted at the end of set_specifications() (right before
+        # calculate_scaling_factors), which is the one spot guaranteed to run
+        # last, before the real solve -- that's the one that actually matters.
+        # Kept here too so the model's DOF is also correct immediately after
+        # construction, before any initialize() call.
+        for unit_name in ["evaporator", "compressor", "condenser", "expansion_valve"]:
+            unit = getattr(self.model.fs, unit_name)
+            unit.control_volume.properties_out[0.0].sum_mole_frac_out.deactivate()
 
         # Set up the objective function
         '''
@@ -365,11 +392,87 @@ class SimpleVaporCompressionCycle:
             self.model.fs.evaporator.inlet.enth_mol[0].fix(self.h_init[-1])
             self.model.fs.evaporator.outlet.enth_mol[0].fix(self.h_init[0])
         else:
-            self.model.fs.evaporator.inlet.temperature[0].fix(self.T_init[-1])
+            # The evaporator INLET is the post-expansion-valve state: it sits ON
+            # the saturation dome (T = T_init[-1], P = Psat, already fixed above)
+            # and is genuinely TWO-PHASE. For a pure fluid with 2 coexisting
+            # phases, Gibbs phase rule gives F = C - P + 2 = 1 - 2 + 2 = 1: only
+            # ONE independent variable is free on the dome (T and P are not
+            # independent there). Fixing BOTH T and P together (as the old code
+            # did) over-specifies this state and the flash goes "locally
+            # infeasible" -- confirmed root cause, see
+            # phase_3b_flash_seed_test.py Attempts 1-2.
+            #
+            # phase_frac is not exposed on the generic FTPx port, so we operate
+            # on the control-volume property block directly (not evaporator.inlet).
+            evap_in = self.model.fs.evaporator.control_volume.properties_in[0]
+
+            T_target = self.T_init[-1]   # expected saturation temperature (K), our guess
+
+            # Leave T FREE instead of fixed -- P is already fixed, so on the
+            # dome T is determined by the EoS's own equal-fugacity condition,
+            # not by us.
+            evap_in.temperature.unfix()
+
+            # Anchor T near the true value with a TIGHT temporary bound
+            # (+/- 5 K). Without this, freeing T lets the solver wander off to
+            # a completely different, unphysical single-phase point far from
+            # the dome (confirmed: Attempt 4 without a bound converged
+            # "optimal" but at T = 173 C, with both phases collapsing to the
+            # same value -- the "trivial solution").
+            evap_in.temperature.setlb(T_target - 5.0)
+            evap_in.temperature.setub(T_target + 5.0)
+
+            # Warm-start AT the expected value so Newton's first step is
+            # already in the correct basin (the real two-phase solution), not
+            # the trivial one.
+            evap_in.temperature.set_value(T_target)
+
+            # Fix the vapor fraction as a NUMERICAL SEED ONLY -- not a
+            # physical constraint. This is what actually prevents the solver
+            # from collapsing both phases to the same value (the trivial
+            # root, which mathematically satisfies equal-fugacity but is
+            # unphysical). It gets UNFIXED right after evaporator.initialize()
+            # below; the real quality is whatever the upstream expansion
+            # valve's isenthalpic balance determines once the cycle is
+            # coupled -- not this 0.2 guess.
+            evap_in.phase_frac["Vap"].fix(0.2)
+
+            # Evaporator outlet is single-phase (superheated vapor) -- fixing
+            # both T and P here is fine, no degeneracy, unchanged from the
+            # original code.
             self.model.fs.evaporator.outlet.temperature[0].fix(self.T_init[0])
+            evap_in.mole_frac_comp["R32"].fix(1.0)    
+
+            assert degrees_of_freedom(evap_in) ==0,"evaporator inlet DOF !=0 before solve"
+            res = get_solver().solve(evap_in)
+            self.logger.info(f"Evaporator inlet 2-phase solve:{res.solver.termination_condition}")
+
+            # Revert the evaporator inlet to the STANDARD (T, P)-given spec now
+            # that a real, converged two-phase point has been found. The
+            # quality/bound scaffolding above was only needed to survive this
+            # one initialization sub-solve -- discard it so the rest of the
+            # cycle sees a normally specified state.
+            evap_in = self.model.fs.evaporator.control_volume.properties_in[0]
+
+            # Quality is no longer fixed -- it becomes flowsheet-determined
+            # once the evaporator is coupled to the upstream expansion valve.
+            evap_in.phase_frac["Vap"].unfix()
+
+            # Remove the temporary +/- 5 K box so it can't clip the real
+            # operating range once the full cycle is solved.
+            evap_in.temperature.setlb(None)
+            evap_in.temperature.setub(None)
+
+            # Fix T at whatever value it actually converged to (should be
+            # close to T_target, e.g. within ~1 K per Attempt 5) -- restores
+            # the same (T, P)-fixed pattern used for every other, single-phase
+            # state.
+            evap_in.temperature.fix(value(evap_in.temperature))
 
         self.logger.info("Initializing evaporator...")
         self.model.fs.evaporator.initialize(outlvl=logging.WARNING)
+
+        
 
         if verbose:
             self.model.fs.evaporator.report()
@@ -390,7 +493,38 @@ class SimpleVaporCompressionCycle:
         self.model.fs.compressor.efficiency_isentropic[0].fix(self.compressor_efficiency)
 
         self.logger.info("Initializing compressor...")
-        self.model.fs.compressor.initialize(outlvl=logging.WARNING)
+        # Phase 3b: T_init[1] is the condensing SATURATION temperature (T_amb+9),
+        # not a real compressor-outlet guess -- it sits right on R32's saturation
+        # dome at the high-side pressure, which is the worst possible starting
+        # point for a cubic-EoS flash (confirmed via diagnostic: phase_frac summed
+        # to 1.13, a non-physical leftover from a failed solve). The isentropic
+        # pseudo-state, though, reliably solves to the correct superheated T on
+        # its own (entropy-matching Steps 2/3 succeed regardless of the guess).
+        # So: try once with the naive guess; if it fails, pull the isentropic
+        # block's own solved temperature and retry -- that puts the real outlet's
+        # initial guess safely into the superheated region instead of on the dome.
+        compressor_state_args = {
+            "flow_mol": 1.0,
+            "temperature": self.T_init[1],
+            "pressure": value(self.model.fs.compressor.inlet.pressure[0]),
+            "mole_frac_comp": {"R32": 1.0},
+        }
+        try:
+            self.model.fs.compressor.initialize(
+                outlvl=logging.WARNING,
+                state_args=compressor_state_args,
+            )
+        except InitializationError:
+            T_isen = value(self.model.fs.compressor.properties_isentropic[0].temperature)
+            self.logger.info(
+                f"Compressor initialize() failed with T_init[1] guess; "
+                f"retrying with isentropic-solved T = {T_isen:.2f} K"
+            )
+            compressor_state_args["temperature"] = T_isen
+            self.model.fs.compressor.initialize(
+                outlvl=logging.WARNING,
+                state_args=compressor_state_args,
+            )
 
         if verbose:
             self.model.fs.compressor.report()
@@ -772,6 +906,19 @@ class SimpleVaporCompressionCycle:
             # Phase 3b: eq_complementarity / eq_sat are Helmholtz-only; the generic
             # SmoothVLE handles the phase transition -- nothing to toggle here.
             pass
+
+        # Phase 3b: re-assert the sum_mole_frac_out deactivation from __init__.
+        # Confirmed via diagnostic: each unit's OWN initialize() call reactivates
+        # its own properties_out[0.0].sum_mole_frac_out as part of its internal
+        # bootstrapping (evaporator and compressor came back active=True after
+        # vc.initialize(), even though __init__ deactivated all 4 -- condenser and
+        # expansion_valve only stayed deactivated because initialize() failed
+        # before reaching them). set_specifications() runs after initialize() and
+        # is the last thing before the real solve, so re-deactivating here, right
+        # before calculate_scaling_factors, is the one place guaranteed to stick.
+        for unit_name in ["evaporator", "compressor", "condenser", "expansion_valve"]:
+            unit = getattr(self.model.fs, unit_name)
+            unit.control_volume.properties_out[0.0].sum_mole_frac_out.deactivate()
 
         # Calculate scaling factors
         calculate_scaling_factors(self.model)
