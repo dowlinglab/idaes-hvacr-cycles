@@ -1,0 +1,13 @@
+method,ambient_C,T_cond_sat_C,cop,converged,fallback_arc_p_disabled,helmholtz_ref_cop,pct_vs_helmholtz,error
+NIST,10,19,3.6684586022353005,True,False,3.95,-7.13,
+NIST,15,24,,False,,3.53,,InitializationError: fs.compressor.control_volume.properties_out failed to initialize successfully. Please check the output logs for more information.
+NIST,20,29,3.162436852956444,True,False,3.19,-0.86,
+NIST,25,34,,False,,2.91,,InitializationError: fs.compressor failed to initialize successfully. Please check the output logs for more information.
+GCGP,10,19,,False,,3.95,,InitializationError: fs.compressor.control_volume.properties_out failed to initialize successfully. Please check the output logs for more information.
+GCGP,15,24,3.368185837578579,True,False,3.53,-4.58,
+GCGP,20,29,3.189924506592638,True,False,3.19,-0.0,
+GCGP,25,34,,False,,2.91,,InitializationError: fs.compressor failed to initialize successfully. Please check the output logs for more information.
+SPGP,10,19,,False,True,3.95,,
+SPGP,15,24,,False,True,3.53,,
+SPGP,20,29,,False,True,3.19,,
+SPGP,25,34,,False,,2.91,,InitializationError: fs.compressor failed to initialize successfully. Please check the output logs for more information.

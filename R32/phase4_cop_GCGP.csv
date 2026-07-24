@@ -1,0 +1,5 @@
+method,ambient_C,T_cond_sat_C,cop,converged,fallback,third_attempt,max_residual,helmholtz_ref_cop,pct_vs_helmholtz,error
+GCGP,10,19,3.493096242574406,True,False,,,3.95,-11.57,
+GCGP,15,24,3.244509090005196,True,False,,,3.53,-8.09,
+GCGP,20,29,3.4339593338251393,True,False,,,3.19,7.65,
+GCGP,25,34,2.8748614078182526,True,False,,,2.91,-1.21,

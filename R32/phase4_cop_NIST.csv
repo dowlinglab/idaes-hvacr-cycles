@@ -1,0 +1,5 @@
+method,ambient_C,T_cond_sat_C,cop,converged,fallback,third_attempt,max_residual,helmholtz_ref_cop,pct_vs_helmholtz,error
+NIST,10,19,3.567652509099732,True,False,,,3.95,-9.68,
+NIST,15,24,3.397421673405592,True,False,,,3.53,-3.76,
+NIST,20,29,3.1316083594949524,True,False,,,3.19,-1.83,
+NIST,25,34,2.800516232546622,True,False,,,2.91,-3.76,

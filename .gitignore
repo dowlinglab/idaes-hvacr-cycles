@@ -1,3 +1,6 @@
+# Personal working notes -- not for the shared repo (Task #27)
+R32/BREADCRUMB_07-20.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
