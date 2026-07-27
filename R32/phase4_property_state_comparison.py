@@ -20,7 +20,7 @@ All cubic-PR enthalpies are molar (J/mol); converted to J/kg (M_R32 =
 mass-basis enth_mass.
 
 Author: Shilpa Narasimhan   Support: Claude AI
-Date created: 2026-07-24
+Date created: 2026-07-27
 """
 from pyomo.environ import value
 from vapor_compression_cubic import SimpleVaporCompressionCycle as CubicCycle, Mode as CubicMode

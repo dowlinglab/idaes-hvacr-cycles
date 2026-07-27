@@ -1,0 +1,93 @@
+Checkpoint: GCGP T_amb=20 anomaly root-cause confirmed; compressor bug-hunt trail fully documented
+
+Phase 4 cross-method comparison (task #37) was showing a +7.65% COP
+deviation vs. the validated Helmholtz baseline for GCGP specifically at
+T_amb=20 C, a regression from an earlier ~0% agreement. This commit is
+a checkpoint of the full investigation: six fix attempts (passes 4-9),
+all tried and reverted after either breaking other GCGP ambients or
+catastrophically breaking the NIST baseline, followed by a direct,
+confirmed diagnosis of the actual root cause. No model behavior has
+changed from the last known-good, fully-validated state -- every
+attempted change in vapor_compression_cubic.py is fully reverted; this
+commit's value is the diagnostic trail and tooling, not a behavior fix.
+
+Root cause (confirmed, not theorized):
+- Built entropy_dome_proximity_check.py, which compares each method's
+  already-solved compressor isentropic-block entropy (entr_mol) against
+  the entropy its own equation of state predicts for pure vapor at that
+  same state (entr_mol_phase["Vap"]) and pure liquid (["Liq"]).
+- GCGP: T10/T15/T25 all land on a single real EoS root (entr_mol exactly
+  equals entr_mol_phase["Vap"], zero ambiguity). T20 -- and ONLY T20 --
+  lands on a genuine two-phase blend (entr_mol sits strictly between the
+  vapor and liquid roots, mathematically requiring phase_frac to be a
+  real fraction between 0 and 1, not 1.0). This is a direct, reproducible
+  consequence of GCGP's fitted (Pc, Tc, omega) placing its own saturation
+  dome differently than real R-32 at this specific operating point, not
+  a numerical fluke isolated to one unlucky ambient.
+- NIST shows a separate, more widespread blending pattern (present at
+  T10/T15/T20, clean only at T25) that does NOT measurably hurt its COP
+  accuracy -- confirms this is a different, unrelated mechanism that
+  should not be chased together with GCGP's issue.
+
+Fix-attempt trail (all reverted, kept for the record):
+- Pass 5: activated a T_out >= T_isen constraint. Fixed the GCGP T20
+  sign flip in isolation but regressed NIST across the grid. Reverted.
+- Pass 6: anchored the isentropic block's temperature bound to CoolProp's
+  real-R32 saturation temperature. Invalid for GCGP/SPGP, which
+  deliberately fit different critical properties than real R32 (~72K gap
+  found). Reverted without needing a full-grid test.
+- Pass 7: tightened the isentropic block's temperature bound around its
+  own warm-started value instead of a flat Tsat-derived range. Partial
+  improvement for GCGP but spread the T_out/T_isen inconsistency to 3 of
+  4 ambients. Reverted.
+- Pass 8: fixed phase_frac["Vap"]=1.0 inside the isolated warm-start
+  solve in _initialize_compressor_with_retry(). Initially misjudged as
+  harmless (single-point comparison looked unaffected); later proven to
+  independently corrupt NIST T_amb=20 (COP=484980, nonsensical) even
+  after passes 7 and 9 were reverted. Fully reverted; the earlier
+  "harmless" comment in the code has been corrected to match.
+- Pass 9: fixed phase_frac["Vap"]=1.0 in the coupled solve, combined with
+  pass 7's bound. Fixed the T_out/T_isen consistency symptom for GCGP but
+  landed on a different, colder, still-wrong branch (severe GCGP T15
+  outlier, -34% vs Helmholtz) AND catastrophically broke NIST T_amb=20
+  (COP=-12980, nonsensical). Decisively reverted.
+- Restored and reconfirmed the fully-original pass-1/2/2b/3-only
+  baseline for both comp_isen_state and comp_out_state bounds --
+  verified against NIST's full known-good grid (3.5677/3.3974/3.1316/
+  2.8005) and GCGP's original diagnosis numbers exactly.
+
+Diagnostic tooling added/updated this session:
+- R32/entropy_dome_proximity_check.py (new): the confirmed root-cause
+  verification tool described above. Went through two prior approaches
+  that turned out unreliable (force-fixing the isentropic block to an
+  on-demand, never-solved dew-point temperature hit solver DOF errors;
+  reading phase_frac directly was uninformative since it sits at a
+  meaningless default whenever the EoS has only one real root) before
+  landing on the entr_mol vs entr_mol_phase[Vap/Liq] comparison used in
+  the final, trustworthy version.
+- R32/compressor_fix_regression_check.py: rewritten from a single
+  hardcoded T_amb=20 check into a full 4-ambient loop, used throughout
+  this investigation to validate (or catch the failure of) every pass
+  against the complete grid, not just the one diagnosed point.
+- R32/phase4_common.py, R32/phase4_gcgp_sweep.py: added an optional
+  --diagnose path that surfaces compressor real-outlet vs. isentropic
+  T/h and evap/cond superheat/subcool from inside the actual production
+  sweep pipeline, instead of re-deriving the same case in a one-off
+  script.
+- R32/compressor_branch_timing_debug.py: date-label correction only
+  (07-24 -> 07-27, this session's actual date).
+- R32/phase4_property_state_comparison.py: date-label correction only.
+- R32/R32_meeting_notes_2026-07-24.md (new): meeting notes covering
+  NIST-vs-Helmholtz validation results reported this week; GCGP/SPGP
+  explicitly deferred to next steps pending this investigation.
+
+Housekeeping:
+- .gitignore: added .vscode/ (local editor config, not for the shared
+  repo) alongside the existing BREADCRUMB_07-20.md exclusion.
+
+Not yet resolved: whether to write a narrowly-scoped fix (detect
+entr_mol landing strictly between the vapor/liquid EoS roots at this one
+block, retry pinned to the vapor branch only when that specific symptom
+is present) or document this as a known, quantified, isolated limitation
+in the Phase 4 report. Full diagnostic trail and resume instructions are
+in R32/BREADCRUMB_07-20.md (gitignored, personal working notes).

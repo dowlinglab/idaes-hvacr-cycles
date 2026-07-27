@@ -10,7 +10,7 @@ Phase 3a Helmholtz baseline).
 Author: Shilpa Narasimhan   Support: Claude AI
 Date created: 2026-07-24
 
-Debug mode (2026-07-24, added while investigating the T_amb=20 anomaly,
+Debug mode (2026-07-27, added while investigating the T_amb=20 anomaly,
 task #37): run with `--diagnose` to print the compressor's real-outlet
 vs isentropic T/h (and evap/cond superheat/subcool) at EVERY ambient in
 this same sweep, e.g.:

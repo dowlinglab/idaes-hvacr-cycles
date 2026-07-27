@@ -208,7 +208,7 @@ class SimpleVaporCompressionCycle:
 
         self.model.fs.compressor.vapor_constraint.deactivate()
 
-        # FIX (2026-07-24, pass 5): `vapor_constraint` above (T_out >= Tsat)
+        # FIX (2026-07-27, pass 5): `vapor_constraint` above (T_out >= Tsat)
         # is too weak on its own -- confirmed via compressor_fix_
         # regression_check.py for BOTH NIST and GCGP that the real outlet
         # can land close to (NIST) or right against (GCGP) a purely
@@ -544,6 +544,24 @@ class SimpleVaporCompressionCycle:
         comp_isen.temperature.setub(T_in + 200.0)
         T_guess = compressor_state_args.get("temperature", T_sat_high + 20.0)
         comp_isen.temperature.set_value(max(T_sat_high + 3.0, min(T_in + 200.0, T_guess)))
+
+        # TRIED (2026-07-27, pass 8) AND REVERTED: fixed
+        # `comp_isen.phase_frac["Vap"]=1.0` HERE (only for this isolated,
+        # temporary solve, unfixed again right after) on the theory that
+        # even this well-bounded warm-start solve was landing on a wrong
+        # (T, quality) pair since phase_frac was left free. Measured
+        # effect on GCGP was negligible (T_isen barely moved), which was
+        # read as "harmless" and left in place while iterating on pass 7/
+        # 9 -- WRONG. After reverting passes 7 and 9, NIST T_amb=20 was
+        # STILL badly broken (COP=484980, nonsensical) with only pass 8
+        # still active -- proving pass 8 alone, even in this fully
+        # isolated/temporary context, corrupts something that propagates
+        # forward through the rest of initialize() for NIST specifically.
+        # REVERTED. Current shipped state is back to pass-1/2/2b/3 ONLY --
+        # phase_frac is not touched anywhere on the isentropic block,
+        # isolated or coupled. This is the fully-original state confirmed
+        # safe for NIST across the whole grid multiple times earlier this
+        # session, before any of passes 4-9 were attempted.
         comp_isen.isentropic_seed_con = Constraint(expr=comp_isen.entr_mol == entr_in)
         res_isen = relaxed_solver.solve(comp_isen)
         self.logger.info(
@@ -1184,7 +1202,7 @@ class SimpleVaporCompressionCycle:
             comp_out_state = self.model.fs.compressor.control_volume.properties_out[0]
             comp_isen_state = self.model.fs.compressor.properties_isentropic[0]
 
-            # TRIED (2026-07-24, pass 6) AND REVERTED: replaced the flat
+            # TRIED (2026-07-27, pass 6) AND REVERTED: replaced the flat
             # `Tsat + 3.0 K` floor with a per-case floor anchored to
             # CoolProp's REAL R32 isentropic temperature at this
             # compressor's actual inlet state/discharge pressure
@@ -1217,11 +1235,82 @@ class SimpleVaporCompressionCycle:
             # the flat margin by that method's own computed pressure
             # ratio (`self.model.fs.compressor.ratioP[0]`), with no
             # external real-fluid reference at all.
-            for blk in (comp_out_state, comp_isen_state):
-                blk.temperature.setlb(T_sat_high_now + 3.0)
-                blk.temperature.setub(T_sat_high_now + 150.0)
+            # FIX (2026-07-27, pass 7): the real anomaly (see the MAJOR
+            # REFRAME breadcrumb entry) is that the ISENTROPIC block's own
+            # entropy-matching solve can land on a spurious root, because
+            # its `phase_frac["Vap"]` is left FREE (unlike the real
+            # outlet, which gets it fixed to 1.0) -- a two-phase mixture's
+            # entropy depends on both T AND quality, so a wide-open T
+            # range gives Newton room to match the target entropy at a
+            # wrong (T, quality) pair far from the correct single-phase
+            # answer. Passes 4-6 all tried to fix this by touching physics
+            # (fixing phase_frac, adding a cross-block constraint, or
+            # anchoring to external real-fluid data) and each broke other
+            # cells. Pass 7 instead does the SAME kind of thing pass 3
+            # already proved safe for the real outlet -- narrow the
+            # TEMPERATURE bound -- but anchors it to the isentropic
+            # block's OWN already-good warm-started value (captured
+            # HERE, before this bound is applied) rather than a flat
+            # Tsat-derived number. `_initialize_compressor_with_retry()`
+            # already does a dedicated, well-posed, CoolProp-Tsat-anchored
+            # solve for this exact block during initialize() -- by the
+            # time set_specifications() runs, comp_isen_state.temperature
+            # should already hold a good value; the wide flat bound
+            # (Tsat+3 to Tsat+150, ~147K range) pass 3 gave it was likely
+            # what let the SUBSEQUENT coupled solve wander away from that
+            # good starting point to a distant spurious root. Tightening
+            # the bound around the warm start directly removes that room
+            # to wander, without touching phase_frac and without any
+            # external real-fluid reference. The real outlet's own bound
+            # is left exactly as pass 3 had it (already proven fine on
+            # its own -- its degenerate-root problem was always inherited
+            # FROM the isentropic block, not independent).
+            # TRIED (2026-07-27, pass 7) AND REVERTED: tightened this
+            # block's bound to `[max(Tsat+3, T_isen_warm-15), T_isen_warm
+            # +30]` (anchored to whatever _initialize_compressor_with_
+            # retry() already had as a warm start) instead of the flat
+            # Tsat+3/Tsat+150 range. Result for GCGP: T_out-T_isen shrank
+            # but stayed large and wrong at 3 of 4 ambients (-14 to -16K),
+            # confirming the warm start itself was already on a bad
+            # branch (see pass 8). TRIED (2026-07-27, pass 9) AND
+            # REVERTED: ALSO fixing `comp_isen_state.phase_frac["Vap"]
+            # =1.0` here (combined with pass 7's tight bound, testing
+            # whether pass 4's original wide-bound combination was what
+            # caused ITS breakage, not the phase_frac fix itself) DID
+            # make T_out track T_isen correctly for GCGP (tiny positive
+            # gaps at 3 of 4 ambients) -- but shifted the WHOLE compressor
+            # calculation onto a different, much colder, still-wrong
+            # branch (GCGP T_isen dropped to ~301-333K vs the ~358-376K
+            # smooth trend established via phase4_property_state_
+            # comparison.py), causing a severe GCGP T15 outlier
+            # (COP=2.3331, -34% vs Helmholtz) AND a catastrophic NIST
+            # T_amb=20 regression (COP=-12980.08, nonsensical -- T_out-
+            # T_isen blew out to +58.5K, the OPPOSITE direction from every
+            # prior bug this session). NIST T_amb=20 is the original
+            # reference point this entire compressor-fix effort has been
+            # validated against -- breaking it this badly is decisive.
+            # REVERTED both passes 7 and 9 back to the flat, pass-3-only
+            # bound (confirmed safe for NIST across the whole grid
+            # multiple times this session). Pass 8 (phase_frac fix inside
+            # the ISOLATED warm-start solve in _initialize_compressor_
+            # with_retry()) was INITIALLY assessed as harmless/inert based
+            # on a single comparison -- that assessment was WRONG. After
+            # reverting passes 7 and 9, NIST T_amb=20 was STILL badly
+            # broken (COP=484980, nonsensical) with only pass 8 still
+            # active, proving it alone corrupts something that propagates
+            # forward through initialize() for NIST specifically. Pass 8
+            # has ALSO been fully reverted (see the comment at its
+            # original location, ~line 551) -- phase_frac is not touched
+            # anywhere on the isentropic block, isolated or coupled. This
+            # is the fully-original state confirmed safe for NIST across
+            # the whole grid multiple times this session.
+            comp_isen_state.temperature.setlb(T_sat_high_now + 3.0)
+            comp_isen_state.temperature.setub(T_sat_high_now + 150.0)
 
-            # TRIED (2026-07-24, pass 5) AND REVERTED: activating
+            comp_out_state.temperature.setlb(T_sat_high_now + 3.0)
+            comp_out_state.temperature.setub(T_sat_high_now + 150.0)
+
+            # TRIED (2026-07-27, pass 5) AND REVERTED: activating
             # `superheat_vs_isentropic_constraint` (T_out >= T_isen -- see
             # its definition/rationale in _define_flowsheet()) did fix the
             # GCGP T_amb=20 sign flip in isolation (constraint confirmed

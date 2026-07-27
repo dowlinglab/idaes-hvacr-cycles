@@ -1,7 +1,7 @@
 """
 compressor_branch_timing_debug.py -- pass 4/5/6 all tried to PATCH the GCGP
 T_amb=20 branch problem with a bound/constraint tweak, and all three made
-things worse elsewhere (see BREADCRUMB_07-20.md, 2026-07-24 pass 4/5/6
+things worse elsewhere (see BREADCRUMB_07-20.md, 2026-07-27 pass 4/5/6
 entries). Before trying a pass 7 patch, this script instead answers a more
 basic question: WHEN does the compressor real outlet drift onto the bad
 (near-Tsat) branch -- is it already wrong right after `vc.initialize()`
@@ -24,7 +24,7 @@ Prints compressor real-outlet and isentropic T/h at three checkpoints:
 3. Right after optimize_COP()'s coupled solve
 
 Author: Shilpa Narasimhan   Support: Claude AI
-Date created: 2026-07-24
+Date created: 2026-07-27
 """
 import sys
 from pyomo.environ import value

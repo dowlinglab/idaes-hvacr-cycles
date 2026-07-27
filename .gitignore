@@ -1,6 +1,9 @@
 # Personal working notes -- not for the shared repo (Task #27)
 R32/BREADCRUMB_07-20.md
 
+# Local editor config -- not for the shared repo
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

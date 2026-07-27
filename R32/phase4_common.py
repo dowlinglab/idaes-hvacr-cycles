@@ -70,7 +70,7 @@ def _max_constraint_residual(model):
 def _compressor_diagnostics(vc):
     """Pull the same compressor-branch numbers
     compressor_fix_regression_check.py prints, for use INSIDE the actual
-    sweep pipeline (added 2026-07-24 to debug phase4_gcgp_sweep.py
+    sweep pipeline (added 2026-07-27 to debug phase4_gcgp_sweep.py
     directly, instead of re-deriving the same case in a separate one-off
     script -- see BREADCRUMB_07-20.md's pass 4/5/6 entries for why the
     isentropic-vs-real-outlet T/h relationship is the thing to watch)."""
@@ -91,7 +91,7 @@ def _compressor_diagnostics(vc):
     }
 
 
-def run_one(method, Tamb, extra_solver_options=None, diagnose=False):
+def run_one(method, Tamb, extra_solver_options=None, diagnose=False, efficiency=0.9999):
     """Run the ideal-cycle spec for one (method, ambient) cell. Returns a
     dict with cop, converged, fallback, max_residual, error -- never
     raises (all exceptions are caught and recorded), so a caller can loop
@@ -110,14 +110,25 @@ def run_one(method, Tamb, extra_solver_options=None, diagnose=False):
     and fold them into the returned dict -- lets a sweep expose the same
     "is this branch actually consistent" numbers used throughout this
     session's compressor debugging, for every ambient in one run, without
-    duplicating the case-building logic in a separate script."""
+    duplicating the case-building logic in a separate script.
+
+    efficiency: compressor isentropic efficiency (added 2026-07-27). ALL
+    reported Phase 3/4 results up to this point used 0.9999 (the near-
+    ideal cycle from Raskar & Mutalikdesai 2016) to isolate the property-
+    package comparison from compressor-design assumptions -- see the
+    2026-07-27 breadcrumb entry. Defaults to 0.9999 so existing callers
+    are unaffected; pass e.g. 0.75 for a lossier, more realistic
+    compressor comparison. NOT yet validated at any value besides 0.9999
+    -- the isentropic-vs-real-outlet branch-selection bug (task #37) was
+    only ever diagnosed/patched at the near-ideal setting, so treat any
+    non-0.9999 result here as unverified until checked the same way."""
     result = {"method": method, "ambient_C": Tamb, "T_cond_sat_C": Tamb + 9,
               "cop": None, "converged": False, "fallback": None,
               "max_residual": None, "third_attempt": None, "error": ""}
     try:
         Tcond_sat = Tamb + 9
         vc = SimpleVaporCompressionCycle(
-            "R32", compressor_efficiency=0.9999, mode=Mode.IMPROVED_TPX, method=method
+            "R32", compressor_efficiency=efficiency, mode=Mode.IMPROVED_TPX, method=method
         )
         vc.specify_initial_conditions(low_side_temperature=-29, high_side_temperature=Tcond_sat)
         vc.initialize(verbose=False)
