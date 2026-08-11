@@ -24,7 +24,7 @@ Date created: 2026-07-27
 """
 from pyomo.environ import value
 from vapor_compression_cubic import SimpleVaporCompressionCycle as CubicCycle, Mode as CubicMode
-from vapor_compression_plr import SimpleVaporCompressionCycle as HelmCycle, Mode as HelmMode
+from vapor_compression import SimpleVaporCompressionCycle as HelmCycle, Mode as HelmMode
 from pyomo.environ import Var
 
 FLUID = "R32"

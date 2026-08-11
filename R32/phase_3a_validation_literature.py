@@ -29,7 +29,7 @@ matplotlib.use("Agg")
 from pyomo.environ import Var, value
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from vapor_compression_plr import SimpleVaporCompressionCycle, Mode
+from vapor_compression import SimpleVaporCompressionCycle, Mode
 
 
 def relax_enth_bounds(vc, hmax=700e3):

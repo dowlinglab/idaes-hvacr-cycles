@@ -1,0 +1,16 @@
+# Optimization-landscape investigation (2026-08-11) -- kept out of git.
+# Not reported to collaborators: GCGP already converges monotonically
+# via phase5/phase6's warmstart chase, so this internal investigation
+# (branch-jumping/root-multiplicity in the 2-D Tevap x Tamb landscape,
+# most visible in NIST) doesn't need to ship. See BREADCRUMB_07-20.md.
+optimization_landscape*.py
+
+# All generated output files (spreadsheets, plots, and result tables) --
+# broadened 2026-08-11 from just cop_landscape* to every .xlsx/.png/.csv
+# in this folder, per Shilpa's request (csv added here to catch the
+# phase5/phase6 results tables too, same reasoning). These are all
+# regeneratable from the scripts that produce them, so none belong in
+# git regardless of which script wrote them.
+*.xlsx
+*.png
+*.csv
