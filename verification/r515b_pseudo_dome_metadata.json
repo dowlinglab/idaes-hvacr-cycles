@@ -1,0 +1,12 @@
+{
+  "fluid1": "r1234ze",
+  "fluid2": "r227ea",
+  "w1_kgkg": 0.911,
+  "Tmin_K": 250.0,
+  "Tmax_K": 360.0,
+  "n_points": 140,
+  "n_converged": 129,
+  "n_failed": 11,
+  "generated_at_utc": "2026-08-13T17:36:48.167006+00:00",
+  "approximation": "fixed-composition pseudo-dome (not full mixture VLE)"
+}

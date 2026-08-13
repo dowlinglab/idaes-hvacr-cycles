@@ -1,0 +1,29 @@
+{
+  "fluid1": "r1234ze",
+  "fluid2": "r227ea",
+  "w1_kgkg": 0.911,
+  "z1_molmol": 0.9385037942295681,
+  "source": "Honeywell Solstice N15 (R-515B) Technical Data Sheet, p.3, Pressure/Enthalpy table (0-170F, 2F steps, psig)",
+  "n_total_points": 86,
+  "n_converged_points": 86,
+  "n_diverged_points": 0,
+  "MAPE_pct": 1.8395720538743345,
+  "bias_pct": 1.8395720538743345,
+  "max_abs_err_pct": 4.1866840973583095,
+  "max_abs_err_at_T_F": 0.0,
+  "x1_equals_y1_simplification": true,
+  "critical_point": {
+    "T_K": 381.8931030593742,
+    "rho_molm3": 3858.4310863276914,
+    "P_Pa": 3576403.923358502,
+    "h_Jmol": 46587.654403569344,
+    "x1": 0.9385037942295681,
+    "converged": true,
+    "dp_drho_resid": 1.5836807385235077e-05,
+    "d2p_drho2_resid": 7.458337894349106e-05,
+    "spinodal_width_molm3": 29.399006338234813,
+    "iterations": 20,
+    "notes": "bisection on spinodal-dip existence (width-based, avoids noisy d2P/drho2 -- see diagnose_spinodal.py); final T bracket=7.00e-05 K, spinodal width=29.399 mol/m^3 (0.653% of rho_scale)"
+  },
+  "generated_at_utc": "2026-08-13T19:56:16.199179+00:00"
+}

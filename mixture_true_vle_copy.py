@@ -2,13 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 Author: Shilpa Narasimhan
-Technical support: Codex (version GPT-5)
-QA/Testing Responsibility: Shilpa
+Technical support: Codex (version GPT-5), Claude AI
+QA/Testing Responsibility: Shilpa Narasimhan
 Creation date: 2026-03-02
+Edit date: 2026-08-13
 Purpose of file: Compute true binary VLE envelopes (bubble/dew) for a
 fixed-overall-composition refrigerant blend using Helmholtz EOS mixture model.
 Dependencies: numpy, scipy, matplotlib, linear_model_codex
-Context reference: PROJECT_CONTEXT.md
+
+This file will serve as the validation for Vanilla code. Meaning that
+if the dew point and bubble points are validated against Honeywell data,
+the code is assumed to be validated.
 
 Version: v0.2.0
 
