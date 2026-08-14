@@ -3573,9 +3573,11 @@ def _cli() -> None:
     isotherms_vapor = compute_isotherms_vapor_side(d1, d2, z1, isotherms)  # superheated-vapor continuation outside the dome, down to the Honeywell chart's own 15 psia floor
     isotherms_supercritical = compute_isotherms_supercritical(d1, d2, z1)  # 240-400F, all above the solved Tc=228.0F -- single phase across the whole chart pressure range, no bubble/dew anchor
     s_values_jmolK = [s_btu * BTU_LBMR_TO_JKGK * mw_mix for s_btu in ISENTROPE_VALUES_BTU_LBMR]  # Btu/(lbm-R) -> J/(kg-K) -> J/(mol-K), final-step-only conversion into the same SI units the EOS solve uses internally
-    isentropes_two_phase = compute_isentropes_two_phase(d1, d2, bubble_rows, dew_rows, s_values_jmolK)
+    # DISABLED 2026-08-14: compute_isentropes_two_phase() was drawing isentropes as continuous curves through the saturation dome interior, which is thermodynamically incorrect and does not match the Honeywell reference diagram. Isentropes should only be drawn in the single-phase regions (liquid and vapor sides), not crossing through the two-phase region.
+    isentropes_two_phase = {}  # compute_isentropes_two_phase(d1, d2, bubble_rows, dew_rows, s_values_jmolK)
     isentropes_liquid = compute_isentrope_liquid_side(d1, d2, z1, bubble_rows, s_values_jmolK)
-    isentropes_vapor = compute_isentrope_vapor_side(d1, d2, z1, dew_rows, s_values_jmolK)
+    isentropes_vapor = {}  # DISABLED 2026-08-14 for diagnostic isolation -- comparing liquid-side isentropes against Honeywell reference to identify where the mismatch originates
+    # isentropes_vapor = compute_isentrope_vapor_side(d1, d2, z1, dew_rows, s_values_jmolK)
     plot_envelope(bubble_rows, dew_rows, mw_mix, args.fig, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical, isentropes_two_phase=isentropes_two_phase, isentropes_liquid=isentropes_liquid, isentropes_vapor=isentropes_vapor)  # SI, DVCT-facing -- unaffected by the Honeywell-units conversion below
     plot_envelope_honeywell_units(bubble_rows, dew_rows, mw_mix, args.fig_honeywell_units, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical, isentropes_two_phase=isentropes_two_phase, isentropes_liquid=isentropes_liquid, isentropes_vapor=isentropes_vapor)  # validation-only, IP units, converted at the final step only
 
