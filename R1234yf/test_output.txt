@@ -1,0 +1,27 @@
+================================================================================
+R1234yf PROPERTY EVALUATION AT CRITICAL POINT
+================================================================================
+
+[1/3] Creating R1234yfPropertyParameterBlock...
+ERROR: evaluating object as numeric value: ScalarParam
+        (object: <class 'pyomo.core.base.param.ScalarParam'>)
+    Evaluating the numeric value of parameter 'ScalarParam' before
+            the Param has been constructed (there is currently no value to
+            return).
+Traceback (most recent call last):
+  File "/Users/snarasi2/idaes-hvacr-cycles/R1234yf/test_critical_point.py", line 191, in <module>
+    properties = test_critical_point()
+  File "/Users/snarasi2/idaes-hvacr-cycles/R1234yf/test_critical_point.py", line 44, in test_critical_point
+    params.build()  # Manually call build() to initialize
+    ~~~~~~~~~~~~^^
+  File "/Users/snarasi2/idaes-hvacr-cycles/R1234yf/R1234yf.py", line 109, in build
+    tau_ref_reduced = T_ref / pyo.value(self.Tc)
+                              ~~~~~~~~~^^^^^^^^^
+  File "/Users/snarasi2/pyomo/pyomo/common/numeric_types.py", line 378, in value
+    tmp = obj(exception=True)
+  File "/Users/snarasi2/pyomo/pyomo/core/base/param.py", line 1001, in __call__
+    raise ValueError(
+    ...<3 lines>...
+    )
+ValueError: Evaluating the numeric value of parameter 'ScalarParam' before
+	the Param has been constructed (there is currently no value to return).

@@ -1,0 +1,28 @@
+{
+  "fluid1": "r1234ze",
+  "fluid2": "r227ea",
+  "w1_kgkg": 0.911,
+  "z1_molmol": 0.9385037942295681,
+  "Tmin_K": 255.4,
+  "Tmax_K": 380.0,
+  "n_points": 80,
+  "bubble_converged": 80,
+  "bubble_failed": 0,
+  "dew_converged": 80,
+  "dew_failed": 0,
+  "generated_at_utc": "2026-08-14T23:25:43.729239+00:00",
+  "method": "P equality + mu1/mu2 equality, analytic fugacity-based chemical potentials",
+  "critical_point": {
+    "T_K": 381.89388793043975,
+    "rho_molm3": 3858.386751370633,
+    "P_Pa": 3576456.647736491,
+    "h_Jmol": 46587.86735012197,
+    "x1": 0.9385037942295681,
+    "converged": true,
+    "dp_drho_resid": 1.6352350174690094e-06,
+    "d2p_drho2_resid": 7.246520243990113e-06,
+    "spinodal_width_molm3": 9.887874269534223,
+    "iterations": 17,
+    "notes": "bisection on spinodal-dip existence (width-based, avoids noisy d2P/drho2 -- see diagnose_spinodal.py); final T bracket=9.95e-05 K, spinodal width=9.888 mol/m^3 (0.241% of rho_scale)"
+  }
+}

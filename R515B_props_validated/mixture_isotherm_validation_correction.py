@@ -2486,577 +2486,6 @@ def compute_isotherms_supercritical(
     return ext
 
 
-BTU_LBMR_TO_JKGK = 4186.8  # exact: 1 Btu_IT/(lbm-R) = 4186.8 J/(kg-K) -- same Btu_IT basis as BTU_LBM_TO_KJ_KG=2.326 (kJ/kg per Btu/lbm), scaled by the exact 9/5 R-to-K degree-size ratio (2326 J/kg * 9/5 = 4186.8 J/(kg-K))
-ISENTROPE_VALUES_BTU_LBMR = [0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.35, 0.37, 0.39, 0.41, 0.43, 0.45, 0.47, 0.49]  # Honeywell TDS p-h chart's printed isentrope labels (page 2), Btu/(lbm-R); converted to J/(mol-K) via mw_mix at the point of use in _cli()
-ENTROPY_REFERENCE_OFFSET_JMOLK = -1.4595  # confirmed 2026-08-14 via check_entropy_reference.py: raw model reads s=1.012423 kJ/(kg*K) at Honeywell's stated reference state (T=273.15K, rho=1258.4 kg/m3, sat. liq. at 0C), vs Honeywell's stated s_ref=1.00 kJ/(kg*K) (per the TDS chart's own footnote: "Reference State: h = 200 kJ/kg, s = 1.00 kJ/kg-K; sat. liq. at 0C"). This constant rebases EVERY _mix_entropy_direct() call to Honeywell's reference convention (mirrors the existing enthalpy chart_offset() fix in pressure_validated_model.py), so Honeywell's chart-printed isentrope labels (ISENTROPE_VALUES_BTU_LBMR above) can be used directly as solver targets with no separate correction needed elsewhere.
-ISENTROPE_P_MAX_PA = LIQUID_EXT_P_MAX_PA  # reuse the same 1350 psia ceiling as the liquid isotherm extension
-ISENTROPE_P_MIN_PA = VAPOR_EXT_P_MIN_PA  # reuse the same 15 psia floor as the vapor isotherm extension
-ISENTROPE_N_POINTS = 40  # matches the smoothness fix applied to the isotherm extensions
-ISENTROPE_VAPOR_MAX_ENTROPY_STEP_JMOLK = 2.0  # added 2026-08-14: caps how large a single Newton
-# step in entropy compute_isentrope_vapor_side() is allowed to take when bridging from its
-# picked anchor row to the target entropy. See diagnose_vapor_isentrope_anchor_collision.py:
-# the dew branch's own s_v(T) is NON-monotonic (rises, peaks at an interior T, falls back down
-# approaching Tc), so its "closest row below target" anchor rule collapses multiple targets
-# (0.41-0.49 Btu/lb-R) onto the SAME anchor row (the peak itself) when their targets exceed
-# that peak. The old code then asked a single 2-unknown Newton solve to jump directly from
-# that shared seed to the target in one shot -- gaps from 5.5 up to 44.8 J/(mol*K) -- which
-# produced visually wrong/implausible isentrope shapes. Instead, bridge the gap through a
-# sequence of intermediate entropy targets (isobaric ramp at the anchor's own seed pressure,
-# each step warm-started from the previous converged state), capped at this step size, before
-# handing off to the existing pressure-continuation walk below. Purely a solve-path change --
-# does not touch the EOS or any property calculation.
-
-
-def _mix_entropy_direct(d1: Dict, d2: Dict, t_k: float, rho_mol: float, x1: float) -> float:
-    """
-    Molar entropy [J/(mol*K)] computed DIRECTLY from the Helmholtz
-    mixture model via the standard multiparameter-EOS identity
-    s/R = tau*alpha_tau - alpha (e.g. [LT99]) -- NOT derived from h and
-    g here. This is algebraically the same result reported by
-    mixture_model_one_point.py's compute_table1_properties (there
-    assembled from the split ideal+residual pieces: s0/R =
-    h0/(RT) - a0_mix - 1, s_over_r = s0/R + tau*ar_tau - ar; once the
-    ideal-gas chain-rule mapping tau_i=(Tc_i/Tred)*tau is applied -- which
-    _mix_alpha_and_derivs already bakes into the COMBINED alpha_tau it
-    returns -- tau*alpha_tau - alpha collapses to exactly that same
-    split sum), computed here directly off alpha_mix/alpha_tau_mix
-    themselves, per 2026-08-13 correction: "S is directly computed. Go
-    back and look at the linear_model/other codes."
-
-    REBASED 2026-08-14 to Honeywell's stated reference convention: the raw
-    EOS identity below (s/R = tau*alpha_tau - alpha) carries whatever
-    absolute entropy zero-point is baked into the underlying IDAES
-    Helmholtz JSON parameter files -- NOT necessarily the same zero-point
-    Honeywell's Solstice N15 TDS chart uses ("Reference State: h = 200
-    kJ/kg, s = 1.00 kJ/kg-K; sat. liq. at 0C"). Confirmed via
-    check_entropy_reference.py: raw model reads s=1.012423 kJ/(kg*K) at
-    that exact reference state, a real (if small) +1.24% offset from
-    Honeywell's stated 1.00. ENTROPY_REFERENCE_OFFSET_JMOLK (module-level
-    constant above) is now added unconditionally so every call to this
-    function returns Honeywell-referenced entropy directly -- mirrors the
-    existing enthalpy chart_offset() pattern in pressure_validated_model.py,
-    just applied inside the core function instead of as a separate
-    caller-side wrapper, since entropy has no other consumer in this file
-    besides the isentrope functions below.
-
-    References
-    ----------
-    - [LT99] -- s/R = tau*(dalpha/dtau) - alpha, standard
-      multiparameter-Helmholtz-EOS entropy identity.
-    - mixture_model_one_point.py, compute_table1_properties -- the
-      established "gold" direct-entropy reference this matches (RAW,
-      pre-offset; that function has not been rebased and still returns
-      the model's native zero-point).
-    - Honeywell Solstice N15 (R-515B) Technical Data Sheet, p.2, reference
-      state footnote.
-    """
-    x1c = _clip_x(x1)
-    x2c = 1.0 - x1c
-    alpha, alpha_tau, _ar_del = _mix_alpha_and_derivs(d1, d2, t_k, rho_mol, x1c)
-    # Recompute tau independently here (rather than threading it through
-    # from _mix_alpha_and_derivs), same self-contained-identity pattern
-    # mix_state itself already uses.
-    mw1 = mw_from_json(d1)
-    mw2 = mw_from_json(d2)
-    tc1 = float(d1["basic"]["Tc"])
-    tc2 = float(d2["basic"]["Tc"])
-    rhoc1_mol = float(d1["basic"]["rhoc"]) / mw1
-    rhoc2_mol = float(d2["basic"]["rhoc"]) / mw2
-    vc1 = 1.0 / rhoc1_mol
-    vc2 = 1.0 / rhoc2_mol
-    tred, _vred = bell2023_Tred_vred(x1c, x2c, tc1, tc2, vc1, vc2, BELL_2023_R1234ZE_R227EA)
-    tau = tred / t_k
-    s_raw = R_u * (tau * alpha_tau - alpha)
-    return s_raw + ENTROPY_REFERENCE_OFFSET_JMOLK
-
-
-def compute_isentropes_two_phase(
-        d1: Dict,
-        d2: Dict,
-        bubble_rows: List[Dict],
-        dew_rows: List[Dict],
-        s_values_jmolK: List[float],
-) -> Dict[float, List[Dict]]:
-    """
-    Two-phase portion of each isentrope. Entropy is extensive/mass-
-    additive just like enthalpy, so at each T where both bubble and dew
-    converged: s_l(T), s_v(T) come from the Gibbs identity at the
-    ALREADY-SOLVED (T,rho_l,x1_liq)/(T,rho_v,y1_vap) states -- no new
-    root-find. If a target s falls within [s_l(T), s_v(T)], the quality
-    x(T) solving s_l(T)+x*(s_v(T)-s_l(T))=s_target is used to get
-    h(T)=h_l(T)+x*(h_v(T)-h_l(T)), same lever rule as
-    compute_quality_lines, just solved for x instead of supplied.
-
-    As T varies across the already-converged sweep, this traces the
-    isentrope's actual diagonal path through the two-phase interior
-    (matches standard refrigerant p-h charts, including Honeywell's,
-    per the 2026-08-13 discussion: entropy is a well-defined STATE
-    property everywhere, including two-phase -- this line represents
-    constant-entropy states, not a claim about which process the fluid
-    is actually undergoing) -- NOT a single crossing point. Pure
-    post-processing throughout, no new EOS solve.
-    """
-    lines: Dict[float, List[Dict]] = {s: [] for s in s_values_jmolK}
-    for b, d in zip(bubble_rows, dew_rows):
-        if b["status"] != "CONVERGED" or d["status"] != "CONVERGED":
-            continue
-        if abs(b["T_K"] - d["T_K"]) > 1.0e-6:
-            continue
-        t_k = b["T_K"]
-        s_l = _mix_entropy_direct(d1, d2, t_k, b["rho_l_molm3"], b["x1_liq"])
-        s_v = _mix_entropy_direct(d1, d2, t_k, d["rho_v_molm3"], d["y1_vap"])
-        if s_v <= s_l:
-            continue  # degenerate/near-critical row -- skip rather than divide by ~0
-        p_pa = 0.5 * (b["P_Pa"] + d["P_Pa"])
-        h_l = b["h_l_Jmol"]
-        h_v = d["h_v_Jmol"]
-        for s_target in s_values_jmolK:
-            if not (s_l <= s_target <= s_v):
-                continue
-            x = (s_target - s_l) / (s_v - s_l)
-            lines[s_target].append({
-                "T_K": float(t_k),
-                "P_Pa": float(p_pa),
-                "h_Jmol": float(h_l + x * (h_v - h_l)),
-                "quality": float(x),
-            })
-    return lines
-
-
-def _isentrope_2eq_residual(vars_, d1: Dict, d2: Dict, z1: float, p_target: float, s_target: float) -> List[float]:
-    """
-    Residual for the 2-equation/2-unknown isentrope solve: unlike the
-    isotherm extensions (T fixed, 1 equation for rho), an isentrope
-    point outside the dome has NEITHER T nor rho fixed -- only s is --
-    so each point needs [P(T,rho,z1)=P_target, s(T,rho,z1)=s_target]
-    solved jointly for (T,rho) via scipy.optimize.root.
-
-    NORMALIZED 2026-08-14: both residuals are now RELATIVE (dimensionless),
-    matching the pattern already used by the original saturation solver's
-    acceptance gates (r_P, r_mu). Raw residuals mixed Pa-scale (~1e5) with
-    J/(mol*K)-scale (~1e2) -- a >1e5x mismatch that made hybr's numerical
-    Jacobian badly conditioned, causing an immediate zero-movement failure
-    even from a good seed (see diagnose_isentrope_026.py 0.26 Btu/lb-R trace,
-    2026-08-14: sol0.success=False with dT=dRho=0.0000 on the very first solve).
-    """
-    t_k, rho = vars_
-    if t_k <= 0 or rho <= 0:
-        return [1.0e12, 1.0e12]  # guard against the solver stepping into an unphysical region
-    st = mix_state(d1, d2, t_k, rho, z1)
-    s = _mix_entropy_direct(d1, d2, t_k, rho, z1)
-    r_p = (st.p_pa - p_target)/p_target
-    r_s = (s - s_target)/s_target
-    return [r_p, r_s]
-
-
-def compute_isentrope_liquid_side(
-        d1: Dict,
-        d2: Dict,
-        z1: float,
-        bubble_rows: List[Dict],
-        s_values_jmolK: List[float],
-        p_max_pa: float = ISENTROPE_P_MAX_PA,
-        n_points: int = ISENTROPE_N_POINTS,
-        crit_point: Optional[Dict] = None,
-) -> Dict[float, List[Dict]]:
-    """
-    Subcooled-liquid portion of each isentrope. At fixed T, entropy
-    decreases as pressure/density increases (Maxwell relation
-    ds/dP|_T = -dV/dT|_P, negative for a normal liquid), so a target
-    entropy BELOW the saturated-liquid entropy s_l(T) at some T
-    corresponds to a state denser than saturation at that same T.
-
-    Anchor selection: among all CONVERGED bubble rows where
-    s_l(T) > s_target (this isentrope is reachable on the subcooled
-    branch at that T), picks the row with s_l(T) closest to s_target as
-    the starting guess -- the best-conditioned point to seed the first
-    2D solve from, since it's closest to an already-known real state.
-    Warm-starts by solving AT that row's own saturation pressure first
-    (should converge tightly, since the guess is already close), THEN
-    walks P outward (log-spaced) up to p_max_pa, reusing each solved
-    (T,rho) as the next step's seed. If no row qualifies, this isentrope
-    never reaches the subcooled-liquid branch anywhere in the sweep.
-
-    CRITICAL-POINT FALLBACK ANCHOR (added 2026-08-14): the T-grid's own
-    sampled bubble rows only ever get to within ~1-2 K of the true Tc
-    (run_true_vle_envelope's bubble/dew solve gets numerically fragile
-    right at the pinch point, so Tmax is deliberately kept a bit short of
-    Tc). That leaves a narrow band of physically valid entropies -- between
-    the bubble branch's own sampled maximum and the true critical entropy
-    s_c -- that no T-grid row can ever anchor, no matter how finely Tmax/n
-    are tuned (entropy vs. T can be numerically steep right next to the
-    critical point, so brute-force grid refinement fights the physics
-    rather than closing the gap). If the ordinary T-grid search above finds
-    no qualifying row AND a converged crit_point is available whose own
-    entropy s_c satisfies the same "reachable" condition (s_c > s_target),
-    fall back to seeding directly from crit_point's own (T_K, rho_molm3,
-    P_Pa) -- a single robust, dedicated solve (solve_mixture_critical_point)
-    that doesn't share the T-grid's near-critical convergence fragility.
-    This only activates for targets in that narrow gap; it changes nothing
-    for isentropes that already find an ordinary T-grid anchor, and it
-    still correctly finds nothing for targets beyond s_c entirely (where
-    even crit_point itself wouldn't satisfy s_c > s_target).
-    """
-    converged_bubble = [r for r in bubble_rows if r["status"] == "CONVERGED"]
-    have_crit = bool(crit_point is not None and crit_point.get("converged", False))
-    ext: Dict[float, List[Dict]] = {s: [] for s in s_values_jmolK}
-    for s_target in s_values_jmolK:
-        best_row = None
-        best_gap = None
-        for r in converged_bubble:
-            t_k = r["T_K"]
-            s_l = _mix_entropy_direct(d1, d2, t_k, r["rho_l_molm3"], z1)
-            if s_l <= s_target:
-                continue
-            gap = s_l - s_target
-            if best_gap is None or gap < best_gap:
-                best_gap = gap
-                best_row = r
-
-        if best_row is not None:
-            t_k = best_row["T_K"]
-            rho_seed = best_row["rho_l_molm3"]
-            p_seed = best_row["P_Pa"]
-        elif have_crit:
-            t_crit = crit_point["T_K"]
-            rho_crit = crit_point["rho_molm3"]
-            x1_crit = crit_point.get("x1", z1)
-            s_crit = _mix_entropy_direct(d1, d2, t_crit, rho_crit, x1_crit)
-            if s_crit <= s_target:
-                continue  # target is beyond s_c entirely -- genuinely unreachable on this branch
-            t_k = t_crit
-            rho_seed = rho_crit
-            p_seed = crit_point["P_Pa"]
-        else:
-            continue
-
-        sol0 = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_seed, s_target), method="hybr", tol=1.0e-10)
-        if not sol0.success:
-            continue
-        t_k, rho_seed = float(sol0.x[0]), float(sol0.x[1])
-        st0 = mix_state(d1, d2, t_k, rho_seed, z1)
-        points: List[Dict] = [{"T_K": t_k, "P_Pa": float(st0.p_pa), "h_Jmol": float(st0.h_jmol)}]
-
-        p_start = float(st0.p_pa)
-        if p_max_pa > p_start:
-            for p_target in np.geomspace(p_start, p_max_pa, n_points)[1:]:
-                sol = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_target, s_target), method="hybr", tol=1.0e-10)
-                if not sol.success:
-                    break  # solver lost the branch -- stop extending rather than guess a wider seed
-                t_k, rho_seed = float(sol.x[0]), float(sol.x[1])
-                st = mix_state(d1, d2, t_k, rho_seed, z1)
-                points.append({"T_K": t_k, "P_Pa": float(st.p_pa), "h_Jmol": float(st.h_jmol)})
-        if len(points) > 1:
-            ext[s_target] = points
-    return ext
-
-
-def compute_isentrope_vapor_side(
-        d1: Dict,
-        d2: Dict,
-        z1: float,
-        dew_rows: List[Dict],
-        s_values_jmolK: List[float],
-        p_min_pa: float = ISENTROPE_P_MIN_PA,
-        n_points: int = ISENTROPE_N_POINTS,
-        crit_point: Optional[Dict] = None,
-        bubble_rows: Optional[List[Dict]] = None,
-) -> Dict[float, List[Dict]]:
-    """
-    Superheated-vapor portion of each isentrope, mirrors
-    compute_isentrope_liquid_side in reverse: a target entropy ABOVE the
-    saturated-vapor entropy s_v(T) at some T is reachable by dropping
-    below saturation pressure at that same T (isothermal expansion
-    increases entropy). Same 2-equation/2-unknown scipy.optimize.root
-    solve, walked in P DOWN from the anchor to p_min_pa.
-
-    CRITICAL-POINT FALLBACK ANCHOR (added 2026-08-14): mirrors the same
-    fallback added to compute_isentrope_liquid_side. The dew branch's own
-    sampled minimum entropy only gets to within ~1-2 K of Tc (same T-grid
-    fragility near the pinch point), leaving a narrow band of physically
-    valid entropies -- between s_c and the dew branch's own sampled
-    minimum -- that no T-grid row can anchor (e.g. confirmed empirically
-    2026-08-14: s_c=0.3775 Btu/lb-R vs. sampled dew minimum 0.3866-0.3866
-    even after pushing Tmax to 382 K / n=160, since entropy drops steeply
-    in the last sliver before Tc). If the ordinary search finds no
-    qualifying row AND a converged crit_point's own entropy s_c satisfies
-    s_c < s_target (mirrors the liquid side's s_c > s_target), seed
-    directly from crit_point's own (T_K, rho_molm3, P_Pa) instead.
-
-    DOME-REENTRY GUARD (added 2026-08-14): confirmed via direct data
-    inspection (user caught this visually first) that for isentropes whose
-    ONLY available dew-line anchor sits on the near-critical, "falling"
-    side of the dew branch's entropy hump (0.39 Btu/lb-R for this mixture:
-    its target, 191.83 J/(mol*K), is below the dew branch's own COLD-END
-    value, 194.6 J/(mol*K), so the rising/pre-peak branch never reaches it
-    at all -- the ONLY qualifying anchor is on the warm, near-Tc falling
-    branch, T~378.4K vs Tc~381.5-381.9K), the downward pressure-continuation
-    walk does NOT reliably stay on the correct superheated-vapor branch.
-    Checked directly: 38 of 40 walked points had enthalpy landing BETWEEN
-    the real bubble and dew line's own interpolated enthalpy at that same
-    pressure -- i.e. genuinely inside the two-phase envelope, not a
-    plotting artifact. Near critical, the 2-unknown Newton solve for
-    (T,rho) given (P,s) has liquid-like and vapor-like roots that sit very
-    close together in density, and warm-starting from a near-critical seed
-    makes it easy to converge onto the wrong one. If bubble_rows is
-    supplied, each walked point (both directions) is checked against the
-    ACTUAL bubble/dew enthalpy at that point's own pressure (linear
-    interpolation over the converged rows); a point whose enthalpy falls
-    between them is rejected and the walk stops there rather than
-    continuing further into invalid territory. If bubble_rows is omitted,
-    this guard is skipped (backward-compatible for callers/diagnostics that
-    don't have bubble_rows on hand) -- but the ACTIVE _cli() call below now
-    always passes it.
-    """
-    converged_dew = [r for r in dew_rows if r["status"] == "CONVERGED"]
-
-    dome_check = None
-    if bubble_rows:
-        conv_bubble = sorted([r for r in bubble_rows if r["status"] == "CONVERGED"], key=lambda r: r["P_Pa"])
-        conv_dew_sorted = sorted(converged_dew, key=lambda r: r["P_Pa"])
-        if conv_bubble and conv_dew_sorted:
-            bubble_P_arr = np.array([r["P_Pa"] for r in conv_bubble])
-            bubble_h_arr = np.array([mix_state(d1, d2, r["T_K"], r["rho_l_molm3"], z1).h_jmol for r in conv_bubble])
-            dew_P_arr = np.array([r["P_Pa"] for r in conv_dew_sorted])
-            dew_h_arr = np.array([mix_state(d1, d2, r["T_K"], r["rho_v_molm3"], z1).h_jmol for r in conv_dew_sorted])
-
-            def _inside_dome(p_pa: float, h_jmol: float) -> bool:
-                if not (bubble_P_arr.min() <= p_pa <= bubble_P_arr.max()):
-                    return False
-                if not (dew_P_arr.min() <= p_pa <= dew_P_arr.max()):
-                    return False
-                h_bub = float(np.interp(p_pa, bubble_P_arr, bubble_h_arr))
-                h_dew = float(np.interp(p_pa, dew_P_arr, dew_h_arr))
-                return h_bub < h_jmol < h_dew
-
-            dome_check = _inside_dome
-
-    def _adaptive_pressure_walk(t0: float, rho0: float, p_from: float, p_to: float, s_target_walk: float, n_points_walk: int) -> List[Dict]:
-        """
-        Walk pressure from p_from toward p_to at fixed entropy s_target_walk,
-        using ADAPTIVE step-size continuation in log-pressure space (added
-        2026-08-14, fixes the near-critical branch-jump confirmed for 0.39
-        Btu/lb-R -- see the DOME-REENTRY GUARD docstring note above). Start at
-        the normal nominal step size (the full p_from->p_to range divided into
-        n_points_walk-1 steps, same granularity as before this fix); if a step
-        FAILS (Newton non-convergence, OR the dome-reentry guard rejects the
-        result as having crossed back into the two-phase envelope), HALVE the
-        step and retry from the last good point instead of giving up
-        immediately. On success the step is allowed to grow back (doubling,
-        capped at the nominal size) so the walk only stays fine-grained through
-        the actually-difficult region right next to a near-critical seed, and
-        speeds back up once safely clear of it. Gives up (stops the walk where
-        it last succeeded) only once the step has been halved below 1/1024 of
-        nominal without a single successful step -- at that point the walk
-        genuinely cannot make progress even at very fine resolution, and
-        further bisection is not going to help.
-        """
-        points: List[Dict] = []
-        log_from, log_to = np.log(p_from), np.log(p_to)
-        total = log_to - log_from
-        if total == 0:
-            return points
-        nominal_step = total / max(1, n_points_walk - 1)
-        min_step = nominal_step / 1024.0
-        step = nominal_step
-        t_cur, rho_cur = t0, rho0
-        log_p_cur = log_from
-        while True:
-            log_p_next = log_p_cur + step
-            overshoot = (step > 0 and log_p_next >= log_to) or (step < 0 and log_p_next <= log_to)
-            if overshoot:
-                log_p_next = log_to
-            if log_p_next == log_p_cur:
-                break
-            p_next = float(np.exp(log_p_next))
-            sol = root(_isentrope_2eq_residual, x0=[t_cur, rho_cur], args=(d1, d2, z1, p_next, s_target_walk), method="hybr", tol=1.0e-10)
-            ok = bool(sol.success)
-            st = None
-            if ok:
-                t_new, rho_new = float(sol.x[0]), float(sol.x[1])
-                st = mix_state(d1, d2, t_new, rho_new, z1)
-                if dome_check is not None and dome_check(float(st.p_pa), float(st.h_jmol)):
-                    ok = False
-            if ok:
-                t_cur, rho_cur = t_new, rho_new
-                log_p_cur = log_p_next
-                points.append({"T_K": t_cur, "P_Pa": float(st.p_pa), "h_Jmol": float(st.h_jmol)})
-                if log_p_cur == log_to:
-                    break
-                grown = step * 2.0
-                step = grown if abs(grown) <= abs(nominal_step) else (abs(nominal_step) if step > 0 else -abs(nominal_step))
-            else:
-                step = step / 2.0
-                if abs(step) < abs(min_step):
-                    break  # can't make progress even at minimum step size -- stop the walk here
-        return points
-
-    # NOTE (2026-08-14): a temperature-stepped continuation was also tried
-    # here as a fallback for anchors right next to the critical point (like
-    # 0.39 Btu/lb-R's), on the theory that pressure is nearly degenerate near
-    # critical while temperature isn't. It looked promising at first (132
-    # clean, monotonic steps with zero Newton failures in an isolated test),
-    # but checking those points against the REAL bubble/dew boundary showed
-    # they were ALSO genuinely inside the two-phase envelope -- not a
-    # numerical artifact this time, but a real physical fact: moving to
-    # cooler T from this anchor moves back toward the dew branch's entropy
-    # hump peak, where the saturation entropy is HIGHER than 0.39's target,
-    # so achieving that target there requires being on the two-phase/liquid
-    # side, not superheated vapor. There may be a valid single-phase
-    # continuation reachable by going to much HIGHER temperatures instead
-    # (as 0.41-0.49 needed), but that wasn't found before this line of
-    # investigation was set aside. Removed rather than left half-working;
-    # see PROJECT_CONTEXT.md for the full trace of what was tried.
-    have_crit = bool(crit_point is not None and crit_point.get("converged", False))
-    # Dew branch's own GLOBAL maximum entropy (the interior peak found in
-    # diagnose_vapor_isentrope_anchor_collision.py, ~196.19 J/(mol*K) for this
-    # mixture) -- the hard ceiling on what entropy value the two-phase dome can
-    # EVER reach, at any T. Only isentropes whose target exceeds this ceiling are
-    # guaranteed to never re-enter the two-phase region no matter what pressure
-    # they're evaluated at; see the upward-walk gate below.
-    s_v_max_dew = max(
-        (_mix_entropy_direct(d1, d2, r["T_K"], r["rho_v_molm3"], z1) for r in converged_dew),
-        default=float("-inf"),
-    )
-    ext: Dict[float, List[Dict]] = {s: [] for s in s_values_jmolK}
-    for s_target in s_values_jmolK:
-        best_row = None
-        best_gap = None
-        for r in converged_dew:
-            t_k = r["T_K"]
-            s_v = _mix_entropy_direct(d1, d2, t_k, r["rho_v_molm3"], z1)
-            if s_v >= s_target:
-                continue
-            gap = s_target - s_v
-            if best_gap is None or gap < best_gap:
-                best_gap = gap
-                best_row = r
-
-        if best_row is not None:
-            t_k = best_row["T_K"]
-            rho_seed = best_row["rho_v_molm3"]
-            p_seed = best_row["P_Pa"]
-            s_anchor = _mix_entropy_direct(d1, d2, t_k, rho_seed, z1)
-        elif have_crit:
-            t_crit = crit_point["T_K"]
-            rho_crit = crit_point["rho_molm3"]
-            x1_crit = crit_point.get("x1", z1)
-            s_crit = _mix_entropy_direct(d1, d2, t_crit, rho_crit, x1_crit)
-            if s_crit >= s_target:
-                continue  # target is below s_c entirely -- genuinely unreachable on this branch
-            t_k = t_crit
-            rho_seed = rho_crit
-            p_seed = crit_point["P_Pa"]
-            s_anchor = s_crit
-        else:
-            continue
-
-        # INCREMENTAL ENTROPY RAMP (added 2026-08-14, see
-        # ISENTROPE_VAPOR_MAX_ENTROPY_STEP_JMOLK above): bridge the gap from the
-        # anchor's own actual entropy up to s_target through a sequence of small
-        # isobaric (fixed at p_seed) substeps, each warm-started from the previous
-        # converged (T, rho), instead of one large single-step Newton jump. This is
-        # what directly fixes the anchor-collision failure mode confirmed in
-        # diagnose_vapor_isentrope_anchor_collision.py -- targets 0.41-0.49 Btu/lb-R
-        # all shared the SAME anchor (the dew branch's own interior entropy peak) and
-        # each had to bridge an increasingly large gap (5.5 up to 44.8 J/(mol*K)) in a
-        # single solve, which produced wrong/implausible shapes. Ramping in small
-        # steps keeps every individual Newton solve well-conditioned regardless of
-        # how large the total gap is.
-        gap = s_target - s_anchor
-        n_substeps = max(1, int(np.ceil(abs(gap) / ISENTROPE_VAPOR_MAX_ENTROPY_STEP_JMOLK)))
-        s_ramp = np.linspace(s_anchor, s_target, n_substeps + 1)[1:]  # skip the anchor itself, already at s_anchor
-
-        ramp_ok = True
-        for s_step in s_ramp:
-            sol_step = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_seed, s_step), method="hybr", tol=1.0e-10)
-            if not sol_step.success:
-                ramp_ok = False
-                break
-            t_k, rho_seed = float(sol_step.x[0]), float(sol_step.x[1])
-        if not ramp_ok:
-            continue  # couldn't bridge the gap even incrementally -- skip this isentrope's vapor side
-
-        st0 = mix_state(d1, d2, t_k, rho_seed, z1)
-        if dome_check is not None and dome_check(float(st0.p_pa), float(st0.h_jmol)):
-            continue  # anchor+ramp itself landed inside the two-phase envelope -- skip this isentrope's vapor side entirely
-        seed_point = {"T_K": t_k, "P_Pa": float(st0.p_pa), "h_Jmol": float(st0.h_jmol)}
-        p_start = float(st0.p_pa)
-
-        # DOWNWARD walk: p_start -> p_min_pa. Uses the ADAPTIVE step-bisection
-        # walker (added 2026-08-14, see _adaptive_pressure_walk docstring above)
-        # instead of a fixed geomspace step -- this is what lets isentropes
-        # anchored right next to the critical point (like 0.39 Btu/lb-R) creep
-        # away from the seed in small enough steps to stay on the correct
-        # density root, rather than jumping onto the wrong one on the first
-        # (previously too-large) step and getting rejected by the dome guard.
-        down_points: List[Dict] = []
-        if p_min_pa < p_start:
-            down_points = _adaptive_pressure_walk(t_k, rho_seed, p_start, p_min_pa, s_target, n_points)
-            # TEMPERATURE-STEPPED FALLBACK (added 2026-08-14, see
-            # _temperature_stepped_walk docstring): if the pressure-driven walk
-            # got stuck before reaching p_min_pa (its last point's pressure is
-            # still well above target), continue from wherever it left off
-            # (or from the original seed if it made zero progress at all)
-            # using the temperature-driven walker instead, which sidesteps the
-            # near-critical pressure degeneracy entirely.
-
-        # UPWARD walk (added 2026-08-14, fixes the "floating disconnected segment"
-        # defect confirmed visually after the entropy-ramp fix above): for targets
-        # whose anchor came from the dew branch's own entropy PEAK (a mid-dome
-        # pressure, ~221 psia for this mixture -- nowhere near the dome's ~510 psia
-        # tip), the ramp lands on a physically valid point at that SAME anchor
-        # pressure, then previously only continued downward in P. Since these
-        # targets sit entirely above the dew branch's own peak entropy, the true
-        # (T,P) locus for this isentrope is single-phase across the ENTIRE pressure
-        # range (it can never re-enter the two-phase dome, whose maximum reachable
-        # entropy anywhere is that same peak) -- so walking p_start UP to p_max_pa
-        # too is physically legitimate, not just cosmetic, and is what reconnects
-        # the curve back up toward the dome/critical region instead of leaving it
-        # floating in mid-plot.
-        # GATE, ORIGINAL VERSION (added 2026-08-14, fixed a real regression the
-        # upward walk above introduced, later found to be OVERLY CONSERVATIVE --
-        # see the relaxed condition below): the original gate only ran the
-        # upward walk when s_target was UNREACHABLE anywhere in the two-phase
-        # dome (s_target > s_v_max_dew), because at the time the upward walk had
-        # NO per-step phase-stability check -- it could and did land on points
-        # that plot visually INSIDE the two-phase dome (a real regression,
-        # confirmed by user inspection of the rendered chart).
-        #
-        # RELAXED (added 2026-08-14, same day): once the DOME-REENTRY GUARD was
-        # generalized to check every walked point (see _adaptive_pressure_walk's
-        # own dome_check call, and the seed-point check a few lines above this
-        # one), the original entropy-ceiling condition became redundant for the
-        # seed's own safety -- the seed is already confirmed outside the dome by
-        # the check above, and every subsequent upward step is independently
-        # verified by the same guard, halting the walk the moment it would
-        # re-enter. The only remaining question was whether an upward walk from
-        # a near-critical anchor like 0.39 Btu/lb-R's (T=378.4K, ~3K below Tc)
-        # actually finds a valid path rather than immediately failing -- tested
-        # directly in diagnose_039_upward_from_anchor.py: all 79/79 steps from
-        # the anchor (482.6psia) up to the 1350psia ceiling succeeded outside
-        # the dome, with zero points rejected, confirming the anchor's proximity
-        # to Tc is exactly what makes this direction safe (there is no two-phase
-        # region above Tc for any entropy). So the gate now only requires that
-        # there's room left to walk (p_start < ISENTROPE_P_MAX_PA); the
-        # entropy-vs-ceiling comparison is no longer needed as a precondition,
-        # since the per-step guard -- not this outer test -- is what actually
-        # keeps the walk safe.
-        # Also uses the adaptive step-bisection walker, same rationale as the
-        # downward walk above.
-        up_points: List[Dict] = []
-        if p_start < ISENTROPE_P_MAX_PA:
-            up_points = _adaptive_pressure_walk(t_k, rho_seed, p_start, ISENTROPE_P_MAX_PA, s_target, n_points)
-
-        # Combine in monotonically DECREASING pressure order (high P -> low P) so
-        # the plotted line is a single smooth stroke, not a zigzag: reversed
-        # up_points (highest P first), then the seed point, then down_points.
-        points = list(reversed(up_points)) + [seed_point] + down_points
-        if len(points) > 1:
-            ext[s_target] = points
-    return ext
-
-
 def plot_envelope(
     bubble_rows: List[Dict],
     dew_rows: List[Dict],
@@ -3068,9 +2497,6 @@ def plot_envelope(
     isotherms_liquid: Optional[Dict[float, List[Dict]]] = None,
     isotherms_vapor: Optional[Dict[float, List[Dict]]] = None,
     isotherms_supercritical: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_two_phase: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_liquid: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_vapor: Optional[Dict[float, List[Dict]]] = None,
 ) -> None:
     """
     Purpose
@@ -3184,9 +2610,7 @@ def plot_envelope(
                 hq = np.append(hq, hc)
                 pq = np.append(pq, pc)
             ax.plot(hq, pq, lw=0.75, color="black")
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request: numbers on isentropes/quality
-            # lines/isotherms made the chart hard to read). Line itself still plots.
-            # ax.annotate(f"x={q:.1f}", (hq[0], pq[0]), fontsize=7, color="black", ha="right", va="center", annotation_clip=False)
+            ax.annotate(f"x={q:.1f}", (hq[0], pq[0]), fontsize=7, color="black", ha="right", va="center", annotation_clip=False)  # 2026-08-13: matplotlib silently drops an annotation whose anchor point falls outside the current axes view (unlike a plotted line, which just clips visually) -- the sweep's coldest point often sits below the 15 psia y-floor set on this validation plot, so every quality-line label vanished until this was set explicitly
     if isotherms:
         # Inside the two-phase region ONLY: an isotherm is the horizontal
         # segment from (h_l,P) to (h_v,P) at that T (T and P are not
@@ -3200,8 +2624,7 @@ def plot_envelope(
             h_v = (iso["h_v_Jmol"] / mw_mix) * 1e-3
             p = iso["P_Pa"] * 1e-5
             ax.plot([h_l, h_v], [p, p], lw=1.0, color="red")
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-            # ax.annotate(f"{t_f:.0f} F", (h_v, p), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
+            ax.annotate(f"{t_f:.0f} F", (h_v, p), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
     if isotherms_liquid:
         # Subcooled-liquid continuation of each two-phase isotherm, OUTSIDE
         # the dome (see compute_isotherms_liquid_side). Each point is a
@@ -3245,47 +2668,7 @@ def plot_envelope(
             # own chart labels these near the top, where the fan of lines
             # is most spread out and legible. Label at this line's last
             # (highest-P) computed point, same idea.
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-            # ax.annotate(f"{t_f:.0f} F", (h_sc[-1], p_sc[-1]), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
-    if isentropes_two_phase or isentropes_liquid or isentropes_vapor:
-        # Constant-entropy lines (see compute_isentropes_two_phase /
-        # compute_isentrope_liquid_side / compute_isentrope_vapor_side).
-        # Each isentrope is drawn as up to 3 separate segments (two-phase,
-        # subcooled-liquid, superheated-vapor) in the SAME color, same
-        # approach as the isotherm liquid/vapor extensions, giving the
-        # visual appearance of one continuous line. Blue, matching
-        # Honeywell's own isentrope color (2026-08-13: "in blue as in
-        # Honeywell").
-        all_s_keys = set()
-        for d_ in (isentropes_two_phase, isentropes_liquid, isentropes_vapor):
-            if d_:
-                all_s_keys.update(d_.keys())
-        for s_target in sorted(all_s_keys):
-            label_pt = None  # (h,p) to anchor this isentrope's single label at
-            tp_pts = (isentropes_two_phase or {}).get(s_target, [])
-            if len(tp_pts) >= 2:
-                h_tp = np.array([(r["h_Jmol"] / mw_mix) * 1e-3 for r in tp_pts], dtype=float)
-                p_tp = np.array([r["P_Pa"] * 1e-5 for r in tp_pts], dtype=float)
-                order = np.argsort(p_tp)
-                ax.plot(h_tp[order], p_tp[order], lw=1.0, color="blue")
-                label_pt = (h_tp[order][-1], p_tp[order][-1])
-            liq_pts = (isentropes_liquid or {}).get(s_target, [])
-            if len(liq_pts) >= 2:
-                h_liq = np.array([(r["h_Jmol"] / mw_mix) * 1e-3 for r in liq_pts], dtype=float)
-                p_liq = np.array([r["P_Pa"] * 1e-5 for r in liq_pts], dtype=float)
-                ax.plot(h_liq, p_liq, lw=1.0, color="blue")
-                label_pt = (h_liq[-1], p_liq[-1])  # prefer the liquid branch's topmost point -- matches Honeywell's own label placement near the chart top
-            vap_pts = (isentropes_vapor or {}).get(s_target, [])
-            if len(vap_pts) >= 2:
-                h_vap = np.array([(r["h_Jmol"] / mw_mix) * 1e-3 for r in vap_pts], dtype=float)
-                p_vap = np.array([r["P_Pa"] * 1e-5 for r in vap_pts], dtype=float)
-                ax.plot(h_vap, p_vap, lw=1.0, color="blue")
-                if label_pt is None:
-                    label_pt = (h_vap[-1], p_vap[-1])
-            if label_pt is not None:
-                s_btu_lbmr = s_target / BTU_LBMR_TO_JKGK / mw_mix  # J/(mol-K) -> J/(kg-K) -> Btu/(lbm-R), inverse of the _cli() conversion, final-step-only
-                # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-                # ax.annotate(f"{s_btu_lbmr:.2f} Btu/lb-R", label_pt, fontsize=7, color="blue", ha="left", va="center", annotation_clip=False)
+            ax.annotate(f"{t_f:.0f} F", (h_sc[-1], p_sc[-1]), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
     ax.set_yscale("log")
     ax.set_xlabel("Enthalpy [kJ/kg]")
     ax.set_ylabel("Pressure [bar]")
@@ -3312,9 +2695,6 @@ def plot_envelope_honeywell_units(
     isotherms_liquid: Optional[Dict[float, List[Dict]]] = None,
     isotherms_vapor: Optional[Dict[float, List[Dict]]] = None,
     isotherms_supercritical: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_two_phase: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_liquid: Optional[Dict[float, List[Dict]]] = None,
-    isentropes_vapor: Optional[Dict[float, List[Dict]]] = None,
 ) -> None:
     """
     Purpose
@@ -3421,9 +2801,7 @@ def plot_envelope_honeywell_units(
                 pq_si = pq_si + [pc_si]
             hq, pq = _convert_all(hq_si, pq_si)
             ax.plot(hq, pq, lw=0.75, color="black")
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request: numbers on isentropes/quality
-            # lines/isotherms made the chart hard to read). Line itself still plots.
-            # ax.annotate(f"x={q:.1f}", (hq[0], pq[0]), fontsize=7, color="black", ha="right", va="center", annotation_clip=False)
+            ax.annotate(f"x={q:.1f}", (hq[0], pq[0]), fontsize=7, color="black", ha="right", va="center", annotation_clip=False)  # 2026-08-13: matplotlib silently drops an annotation whose anchor point falls outside the current axes view (unlike a plotted line, which just clips visually) -- the sweep's coldest point often sits below the 15 psia y-floor set on this validation plot, so every quality-line label vanished until this was set explicitly
     if isotherms:
         # Same two-phase-only horizontal-segment logic as plot_envelope;
         # conversion to IP units happens here at the final step only.
@@ -3436,8 +2814,7 @@ def plot_envelope_honeywell_units(
             h_l_ip, p_ip = to_honeywell_units(h_l_si, p_si)
             h_v_ip, _ = to_honeywell_units(h_v_si, p_si)
             ax.plot([h_l_ip, h_v_ip], [p_ip, p_ip], lw=1.0, color="red")
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-            # ax.annotate(f"{t_f:.0f} F", (h_v_ip, p_ip), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
+            ax.annotate(f"{t_f:.0f} F", (h_v_ip, p_ip), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
     if isotherms_liquid:
         # Subcooled-liquid continuation of each isotherm, outside the dome
         # (see compute_isotherms_liquid_side). Conversion to IP units
@@ -3483,46 +2860,7 @@ def plot_envelope_honeywell_units(
             # anchor a label to -- Honeywell's own chart labels these
             # near the top of the chart, where the fan is most spread
             # out. Label at this line's last (highest-P) computed point.
-            # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-            # ax.annotate(f"{t_f:.0f} F", (h_sc[-1], p_sc[-1]), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
-    if isentropes_two_phase or isentropes_liquid or isentropes_vapor:
-        # Constant-entropy lines, same 3-segment approach as plot_envelope
-        # above. Conversion to IP units happens here at the final step
-        # only, via the same _convert_all helper used elsewhere in this
-        # function. Blue, matching Honeywell's own isentrope color.
-        all_s_keys = set()
-        for d_ in (isentropes_two_phase, isentropes_liquid, isentropes_vapor):
-            if d_:
-                all_s_keys.update(d_.keys())
-        for s_target in sorted(all_s_keys):
-            label_pt = None
-            tp_pts = (isentropes_two_phase or {}).get(s_target, [])
-            if len(tp_pts) >= 2:
-                h_tp_si = [(r["h_Jmol"] / mw_mix) * 1e-3 for r in tp_pts]
-                p_tp_si = [r["P_Pa"] for r in tp_pts]
-                h_tp, p_tp = _convert_all(h_tp_si, p_tp_si)
-                order = np.argsort(p_tp)
-                ax.plot(h_tp[order], p_tp[order], lw=1.0, color="blue")
-                label_pt = (h_tp[order][-1], p_tp[order][-1])
-            liq_pts = (isentropes_liquid or {}).get(s_target, [])
-            if len(liq_pts) >= 2:
-                h_liq_si = [(r["h_Jmol"] / mw_mix) * 1e-3 for r in liq_pts]
-                p_liq_si = [r["P_Pa"] for r in liq_pts]
-                h_liq, p_liq = _convert_all(h_liq_si, p_liq_si)
-                ax.plot(h_liq, p_liq, lw=1.0, color="blue")
-                label_pt = (h_liq[-1], p_liq[-1])
-            vap_pts = (isentropes_vapor or {}).get(s_target, [])
-            if len(vap_pts) >= 2:
-                h_vap_si = [(r["h_Jmol"] / mw_mix) * 1e-3 for r in vap_pts]
-                p_vap_si = [r["P_Pa"] for r in vap_pts]
-                h_vap, p_vap = _convert_all(h_vap_si, p_vap_si)
-                ax.plot(h_vap, p_vap, lw=1.0, color="blue")
-                if label_pt is None:
-                    label_pt = (h_vap[-1], p_vap[-1])
-            if label_pt is not None:
-                s_btu_lbmr = s_target / BTU_LBMR_TO_JKGK / mw_mix
-                # NUMERIC LABEL DISABLED 2026-08-14 (user request): line itself still plots.
-                # ax.annotate(f"{s_btu_lbmr:.2f} Btu/lb-R", label_pt, fontsize=7, color="blue", ha="left", va="center", annotation_clip=False)
+            ax.annotate(f"{t_f:.0f} F", (h_sc[-1], p_sc[-1]), fontsize=7, color="red", ha="left", va="center", annotation_clip=False)
     ax.set_yscale("log")
     # Axis label text and tick values below match the Honeywell TDS p-h
     # chart's own convention exactly (page 2, confirmed against the
@@ -3907,13 +3245,8 @@ def _cli() -> None:
     isotherms_liquid = compute_isotherms_liquid_side(d1, d2, z1, isotherms)  # subcooled-liquid continuation outside the dome, up to the Honeywell chart's own 1350 psia ceiling
     isotherms_vapor = compute_isotherms_vapor_side(d1, d2, z1, isotherms)  # superheated-vapor continuation outside the dome, down to the Honeywell chart's own 15 psia floor
     isotherms_supercritical = compute_isotherms_supercritical(d1, d2, z1)  # 240-400F, all above the solved Tc=228.0F -- single phase across the whole chart pressure range, no bubble/dew anchor
-    s_values_jmolK = [s_btu * BTU_LBMR_TO_JKGK * mw_mix for s_btu in ISENTROPE_VALUES_BTU_LBMR]  # Btu/(lbm-R) -> J/(kg-K) -> J/(mol-K), final-step-only conversion into the same SI units the EOS solve uses internally
-    # DISABLED 2026-08-14: compute_isentropes_two_phase() was drawing isentropes as continuous curves through the saturation dome interior, which is thermodynamically incorrect and does not match the Honeywell reference diagram. Isentropes should only be drawn in the single-phase regions (liquid and vapor sides), not crossing through the two-phase region.
-    isentropes_two_phase = {}  # compute_isentropes_two_phase(d1, d2, bubble_rows, dew_rows, s_values_jmolK)
-    isentropes_liquid = compute_isentrope_liquid_side(d1, d2, z1, bubble_rows, s_values_jmolK, crit_point=crit_point)
-    isentropes_vapor = compute_isentrope_vapor_side(d1, d2, z1, dew_rows, s_values_jmolK, crit_point=crit_point, bubble_rows=bubble_rows)  # RE-ENABLED 2026-08-14: shares the now-fixed (residual-normalized) _isentrope_2eq_residual with the liquid side; both now also take the crit_point fallback anchor for the near-critical entropy gap. bubble_rows added same day for the dome-reentry guard (see docstring) -- required to check walked points against the real two-phase envelope.
-    plot_envelope(bubble_rows, dew_rows, mw_mix, args.fig, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical, isentropes_two_phase=isentropes_two_phase, isentropes_liquid=isentropes_liquid, isentropes_vapor=isentropes_vapor)  # SI, DVCT-facing -- unaffected by the Honeywell-units conversion below
-    plot_envelope_honeywell_units(bubble_rows, dew_rows, mw_mix, args.fig_honeywell_units, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical, isentropes_two_phase=isentropes_two_phase, isentropes_liquid=isentropes_liquid, isentropes_vapor=isentropes_vapor)  # validation-only, IP units, converted at the final step only
+    plot_envelope(bubble_rows, dew_rows, mw_mix, args.fig, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical)  # SI, DVCT-facing -- unaffected by the Honeywell-units conversion below
+    plot_envelope_honeywell_units(bubble_rows, dew_rows, mw_mix, args.fig_honeywell_units, crit_point=crit_point, quality_lines=quality_lines, isotherms=isotherms, isotherms_liquid=isotherms_liquid, isotherms_vapor=isotherms_vapor, isotherms_supercritical=isotherms_supercritical)  # validation-only, IP units, converted at the final step only
 
     nb = int(sum(r["status"] == "CONVERGED" for r in bubble_rows))  # count of bubble points that met the strict (M6) convergence gate
     nd = int(sum(r["status"] == "CONVERGED" for r in dew_rows))  # count of dew points that met the strict (M6) convergence gate
