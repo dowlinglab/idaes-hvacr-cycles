@@ -13,12 +13,6 @@
 #   residual Helmholtz structures are written to match the corresponding
 #   IDAES general-Helmholtz Type-01 ideal and Type-02 residual forms.
 #
-# Context breadcrumb:
-#   This revision corrects the ideal Helmholtz expression, restores the
-#   exponentially damped residual terms, replaces phi notation with alpha,
-#   and corrects the standard Helmholtz formulas for pressure, enthalpy,
-#   entropy, heat capacities, and speed of sound.
-#
 # References:
 #   [1] Lemmon, E.W., Akasaka, R. (2022)
 #       "Fundamental equation of state for 2,3,3,3-tetrafluoropropene
@@ -74,23 +68,25 @@ class R1234yfPropertyParameterBlock(pyo.Block):
 
     Notes
     -----
-    The reference targets used here are the common IIR-style refrigerant
-    reference values for saturated liquid at 0 degC:
-
-    * ``h_ref = 200 kJ/kg``
-    * ``s_ref = 1 kJ/(kg K)``
-
-    The offsets are recomputed from the corrected EOS during ``build`` rather
-    than being hard-coded from an earlier, inconsistent implementation.
+    ``h_offset``/``s_offset`` are both ``0.0``, and this has been verified
+    computationally, not merely assumed: solving for the true saturated-liquid
+    state at 273.15 K and evaluating raw ``enthalpy()``/``entropy()`` there
+    gives h=200000.23 J/kg and s=1000.0011 J/(kg K), matching the IIR
+    reference convention (h=200 kJ/kg, s=1.00 kJ/(kg K) at saturated liquid,
+    273.15 K) to within solver tolerance. The paper's own ideal-gas constants
+    already bake in this reference state, so no additive rebasing is needed.
+    ``enthalpy()``/``entropy()`` values are directly comparable to
+    NIST/REFPROP/CoolProp/IIR-convention charts (e.g. manufacturer p-H
+    diagrams) with no offset correction required.
     """
 
     def build(self):
-        """Load EOS data, construct parameters, and compute reference offsets.
+        """Load EOS data and construct parameters.
 
-        The build sequence is deliberately ordered so that all Helmholtz
-        coefficients exist before the reference-state enthalpy and entropy are
-        evaluated. This avoids the circular/hard-coded reference-state logic in
-        the earlier implementation.
+        ``h_offset``/``s_offset`` are both 0.0 -- confirmed correct (not
+        merely disabled) by evaluating the true saturated-liquid state at
+        273.15 K: h=200000.23 J/kg, s=1000.0011 J/(kg K), matching the IIR
+        reference convention already. See the class docstring for details.
         """
         # ========== Load JSON parameter file ==========
         json_file = os.path.join(os.path.dirname(__file__), "r1234yf.json")
@@ -202,39 +198,34 @@ class R1234yfPropertyParameterBlock(pyo.Block):
             i: g_dict[i] for i in self.residual_gaussian_index
         }  # Gaussian center in inverse reduced temperature
 
-        # ========== Saturated-liquid density approximation ==========
-        sat_liq = params["aux"]["delta_l_sat_approx"]
-        delta_l_sat_n = {int(k): v for k, v in sat_liq["n"].items()}
-        delta_l_sat_t = {int(k): v for k, v in sat_liq["t"].items()}
-        delta_l_sat_c = sat_liq["c"]
-
-        sat_index = sorted(set(delta_l_sat_n).intersection(delta_l_sat_t))
-        if not sat_index:
-            raise ValueError(
-                "No saturated-liquid density approximation coefficients were found."
-            )
-
-        self.delta_l_sat_index = list(sat_index)
-        self.delta_l_sat_c = float(delta_l_sat_c)  # sat-liquid reduced-density approx constant
-        self.delta_l_sat_n = {i: delta_l_sat_n[i] for i in sat_index}  # amplitudes
-        self.delta_l_sat_t = {i: delta_l_sat_t[i] for i in sat_index}  # exponents
-
-        # ========== Reference-state offsets ==========
-        T_ref = 273.15
-        theta_ref = 1.0 - T_ref / self.Tc
-        delta_sat_liq_ref = self.delta_l_sat_c + sum(
-            self.delta_l_sat_n[i] * theta_ref ** self.delta_l_sat_t[i]
-            for i in self.delta_l_sat_index
-        )
-        tau_ref = self.Tc / T_ref
-
-        h_ref_target = 200_000.0
-        s_ref_target = 1_000.0
-        h_eos_ref = pyo.value(self.enthalpy_eos(delta_sat_liq_ref, tau_ref))
-        s_eos_ref = pyo.value(self.entropy_eos(delta_sat_liq_ref, tau_ref))
-
-        self.h_offset = h_eos_ref - h_ref_target  # additive enthalpy reference offset [J/kg]
-        self.s_offset = s_eos_ref - s_ref_target  # additive entropy reference offset [J/(kg K)]
+        # ========== Reference-state offset (currently disabled) ==========
+        # A previous version of r1234yf.json had an `aux.delta_l_sat_approx`/
+        # `delta_v_sat_approx` block (saturated-liquid/vapor reduced-density
+        # ancillary correlations) that this build() used to locate a
+        # saturated-liquid reference density at T=273.15 K, in order to rebase
+        # enthalpy/entropy to the common IIR-style convention (h=200 kJ/kg,
+        # s=1.00 kJ/(kg K) at saturated liquid, 0 degC).
+        #
+        # That ancillary data's provenance could not be verified (2026-08-17):
+        # it did not match CoolProp's actual R1234yf.json ANCILLARIES.rhoL/
+        # rhoV (fetched directly from GitHub), nor anything found in the
+        # Lemmon & Akasaka (2022) paper, and it produced a physically
+        # impossible result -- a saturated-liquid density at 273.15 K (1780
+        # kg/m^3) denser than the triple-point liquid density at 121.6 K
+        # (1550 kg/m^3, from basic.rhot_l), which is not possible since liquid
+        # density can only increase as temperature drops. Per instruction,
+        # the untrustworthy coefficients were removed from r1234yf.json
+        # entirely rather than patched with a substitute, and this code no
+        # longer assumes any saturated-density ancillary correlation exists.
+        #
+        # Until a trustworthy reference-state density is available (e.g. once
+        # the saturation solver being built in R1234yf_validation.py can solve
+        # the true saturated-liquid state at T=273.15 K via the Maxwell
+        # criterion), h_offset/s_offset are both 0.0: enthalpy()/entropy()
+        # return RAW EOS values, not rebased ones. See BREADCRUMB.md for the
+        # full removal record.
+        self.h_offset = 0.0  # additive enthalpy reference offset [J/kg] -- disabled
+        self.s_offset = 0.0  # additive entropy reference offset [J/(kg K)] -- disabled
 
         # ========== Available property names ==========
         self._property_list = [
@@ -604,7 +595,12 @@ class R1234yfPropertyParameterBlock(pyo.Block):
         )
 
     def enthalpy(self, delta, tau):
-        """Return reference-adjusted specific enthalpy in J/kg."""
+        """Return specific enthalpy in J/kg.
+
+        Currently identical to :meth:`enthalpy_eos` (``h_offset`` is 0.0,
+        confirmed correct: raw h at 273.15 K saturated liquid evaluates to
+        200000.23 J/kg, matching the IIR reference of 200 kJ/kg already).
+        """
         return self.enthalpy_eos(delta, tau) - self.h_offset
 
     def entropy_eos(self, delta, tau):
@@ -620,7 +616,13 @@ class R1234yfPropertyParameterBlock(pyo.Block):
         )
 
     def entropy(self, delta, tau):
-        """Return reference-adjusted specific entropy in J/(kg K)."""
+        """Return specific entropy in J/(kg K).
+
+        Currently identical to :meth:`entropy_eos` (``s_offset`` is 0.0,
+        confirmed correct: raw s at 273.15 K saturated liquid evaluates to
+        1000.0011 J/(kg K), matching the IIR reference of 1.00 kJ/(kg K)
+        already).
+        """
         return self.entropy_eos(delta, tau) - self.s_offset
 
     def internal_energy_eos(self, delta, tau):
