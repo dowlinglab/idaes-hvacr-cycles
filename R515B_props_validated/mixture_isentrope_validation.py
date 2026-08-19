@@ -2649,6 +2649,57 @@ def _isentrope_2eq_residual(vars_, d1: Dict, d2: Dict, z1: float, p_target: floa
     return [r_p, r_s]
 
 
+def _verify_isentrope_solution(sol, d1: Dict, d2: Dict, z1: float, p_target: float, s_target: float,
+                                p_tol_rel: float = 1.0e-6, s_tol_rel: float = 1.0e-6):
+    """
+    Explicit post-hoc verification that a converged _isentrope_2eq_residual
+    solve actually landed on the intended (P, s) point, rather than trusting
+    scipy's own sol.success alone.
+
+    ADDED 2026-08-17, after cross-checking the R1234yf sister project's own
+    documented Bug #3 ("Isentrope solver silently returning wrong answers
+    very close to the critical point"): their solver reported
+    sol.success=True while the solved state was off by ~100 J/(kg K) from
+    the target entropy -- sol.success only means the underlying numerical
+    method (here, MINPACK's hybrd via scipy.optimize.root(method="hybr"))
+    terminated normally, not that it actually found the correct root; near a
+    critical point, dP/drho -> 0 and the residual surface can have a shallow
+    region the solver settles into without truly zeroing the residual. This
+    project's own bubble/dew VLE solver (solve_bubble_at_t/solve_dew_at_t)
+    already re-checks its converged state explicitly (r_p<=1e-6,
+    r_mu<=1e-6) instead of trusting sol.success alone -- the isentrope-
+    walking code below previously did NOT do this, which was a real
+    structural asymmetry in this codebase even though an empirical check
+    (diagnose_isentrope_entropy_verification.py, 2026-08-17: 810 points
+    across all 15 isentropes, both branches, at this project's standard
+    parameters) found ZERO actual mismatches in current real output. This
+    check is therefore defensive insurance against FUTURE parameter changes
+    (different w1, T-grid, or pressure ceiling) silently relying on
+    sol.success alone the way R1234yf's code did, not a fix for an observed
+    wrong answer today.
+
+    Returns (t_k, rho, state) -- state being the mix_state(...) result at
+    the verified point, so callers don't need a second EOS call -- on a
+    verified success, or None if sol.success was False OR the solved
+    state's actual pressure/entropy don't match the targets within
+    tolerance (relative residuals, same normalization _isentrope_2eq_residual
+    already uses internally; defaults match the 1e-6 gate this project's
+    own bubble/dew solver already applies).
+    """
+    if not sol.success:
+        return None
+    t_k, rho = float(sol.x[0]), float(sol.x[1])
+    if t_k <= 0 or rho <= 0:
+        return None
+    st = mix_state(d1, d2, t_k, rho, z1)
+    s_actual = _mix_entropy_direct(d1, d2, t_k, rho, z1)
+    r_p = abs(st.p_pa - p_target) / max(1.0, abs(p_target))
+    r_s = abs(s_actual - s_target) / max(1.0, abs(s_target))
+    if r_p > p_tol_rel or r_s > s_tol_rel:
+        return None
+    return t_k, rho, st
+
+
 def compute_isentrope_liquid_side(
         d1: Dict,
         d2: Dict,
@@ -2731,20 +2782,20 @@ def compute_isentrope_liquid_side(
             continue
 
         sol0 = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_seed, s_target), method="hybr", tol=1.0e-10)
-        if not sol0.success:
+        verified0 = _verify_isentrope_solution(sol0, d1, d2, z1, p_seed, s_target)  # explicit residual check, not just sol.success -- see docstring (2026-08-17, R1234yf Bug #3 cross-check)
+        if verified0 is None:
             continue
-        t_k, rho_seed = float(sol0.x[0]), float(sol0.x[1])
-        st0 = mix_state(d1, d2, t_k, rho_seed, z1)
+        t_k, rho_seed, st0 = verified0
         points: List[Dict] = [{"T_K": t_k, "P_Pa": float(st0.p_pa), "h_Jmol": float(st0.h_jmol)}]
 
         p_start = float(st0.p_pa)
         if p_max_pa > p_start:
             for p_target in np.geomspace(p_start, p_max_pa, n_points)[1:]:
                 sol = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_target, s_target), method="hybr", tol=1.0e-10)
-                if not sol.success:
-                    break  # solver lost the branch -- stop extending rather than guess a wider seed
-                t_k, rho_seed = float(sol.x[0]), float(sol.x[1])
-                st = mix_state(d1, d2, t_k, rho_seed, z1)
+                verified = _verify_isentrope_solution(sol, d1, d2, z1, p_target, s_target)
+                if verified is None:
+                    break  # solver lost the branch, or converged to the wrong point (verified explicitly, not just sol.success) -- stop extending rather than guess a wider seed
+                t_k, rho_seed, st = verified
                 points.append({"T_K": t_k, "P_Pa": float(st.p_pa), "h_Jmol": float(st.h_jmol)})
         if len(points) > 1:
             ext[s_target] = points
@@ -2870,11 +2921,11 @@ def compute_isentrope_vapor_side(
                 break
             p_next = float(np.exp(log_p_next))
             sol = root(_isentrope_2eq_residual, x0=[t_cur, rho_cur], args=(d1, d2, z1, p_next, s_target_walk), method="hybr", tol=1.0e-10)
-            ok = bool(sol.success)
+            verified = _verify_isentrope_solution(sol, d1, d2, z1, p_next, s_target_walk)  # explicit residual check, not just sol.success -- see docstring (2026-08-17, R1234yf Bug #3 cross-check)
+            ok = verified is not None
             st = None
             if ok:
-                t_new, rho_new = float(sol.x[0]), float(sol.x[1])
-                st = mix_state(d1, d2, t_new, rho_new, z1)
+                t_new, rho_new, st = verified
                 if dome_check is not None and dome_check(float(st.p_pa), float(st.h_jmol)):
                     ok = False
             if ok:
@@ -2970,10 +3021,11 @@ def compute_isentrope_vapor_side(
         ramp_ok = True
         for s_step in s_ramp:
             sol_step = root(_isentrope_2eq_residual, x0=[t_k, rho_seed], args=(d1, d2, z1, p_seed, s_step), method="hybr", tol=1.0e-10)
-            if not sol_step.success:
+            verified_step = _verify_isentrope_solution(sol_step, d1, d2, z1, p_seed, s_step)  # explicit residual check, not just sol.success -- see docstring (2026-08-17, R1234yf Bug #3 cross-check)
+            if verified_step is None:
                 ramp_ok = False
                 break
-            t_k, rho_seed = float(sol_step.x[0]), float(sol_step.x[1])
+            t_k, rho_seed, _ = verified_step
         if not ramp_ok:
             continue  # couldn't bridge the gap even incrementally -- skip this isentrope's vapor side
 

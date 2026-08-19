@@ -95,6 +95,62 @@ Shared EOS module (Bell 2023 reducing functions, departure function, pure-fluid 
 ### `verification/`
 Supporting plots and metadata (`r515b_true_vle_envelope*.png`, `current_model_honeywell_units_FIXED*.png`, `r515b_true_vle_metadata.json`) generated during this session's diagnostic work.
 
-## Current overall status (2026-08-14)
+## 2026-08-17 additions: sol.success defensive verification, Kang et al. (2024) independent density checks
 
-The model is being treated as validated, with every known error and its magnitude recorded in `VALIDATION_REPORT.md` (this folder) -- that file is the authoritative, audit-ready summary of what this model gets right and wrong; this README describes what each file is and does. In short: pressure and enthalpy validate well almost everywhere (the ~1-2% density-extrapolation caveat above still applies to externally-supplied densities). Entropy is the weakest property, with a bias that grows approaching the critical point, for the structural reason described above -- not yet corrected, but now well understood and documented rather than papered over. The two near-critical isentropes (0.37, 0.39 Btu/lb-R) each have their own documented, non-bug explanation. None of this reaches the repository's cycle-simulation models today (they use IDAES's native pure-component property package, not this mixture model) -- `VALIDATION_REPORT.md` documents exactly how that would change if this mixture model is ever wired into a cycle's compressor block, since compressor duty is computed from an isentropic (constant-entropy) constraint.
+Prompted by cross-checking the sister `R1234yf/` project's own documented
+solver bug (Bug #3: `sol.success=True` reported near the critical point while
+the solved state was actually off by ~100 J/(kg K) from the target entropy --
+`sol.success` only means the numerical method terminated normally, not that
+it found the correct root).
+
+### `mixture_isentrope_validation.py` (updated, still the active/current file)
+Added `_verify_isentrope_solution()`: an explicit post-hoc check (re-evaluates
+the converged state and confirms both the pressure and entropy residuals are
+within 1e-6 relative tolerance) wired into all three `scipy.optimize.root`
+call sites in `compute_isentrope_liquid_side()`/`compute_isentrope_vapor_
+side()`, replacing bare `sol.success` gating. This project's own bubble/dew
+VLE solver (`solve_bubble_at_t`/`solve_dew_at_t`) already had this discipline
+(re-checking `r_p<=1e-6`, `r_mu<=1e-6`); the isentrope-walking code did not,
+which was a real structural asymmetry even though it hadn't (yet) produced a
+wrong answer in current output.
+
+### `diagnose_isentrope_entropy_verification.py`
+The empirical check motivating the fix above: independently verifies every
+point the isentrope-walking code emits actually has the entropy it claims.
+Result: 810 points checked across all 15 isentropes, both branches, at this
+project's standard parameters -- zero actual mismatches found in current real
+output. The `_verify_isentrope_solution()` fix is therefore defensive
+insurance against future parameter changes (different w1, T-grid, or
+pressure ceiling), not a fix for an observed wrong answer today.
+
+### `validate_against_kang2024.py`
+Point-by-point comparison of this project's R-1234ze(E)/R-227ea mixture model
+against independent, real experimental R-515B liquid density data from Kang,
+Yang, Cui & Gu (2024), *Int. J. Refrigeration* 168, 59-69
+(https://doi.org/10.1016/j.ijrefrig.2024.08.012) -- the first comparison in
+this project against data that is NOT the Honeywell TDS p-H chart. Data:
+67 of the paper's reported 68 points (Table 4, T=254.13-362.34K,
+P=0.87-12.27 MPa, compressed/subcooled liquid only), transcribed by hand;
+the 68th row could not be cleanly read from the printed table image and this
+gap is reported honestly rather than padded. For each point, solves the
+model's own liquid density at that exact (T, P) via brentq bracketing on
+`mix_state(...).p_pa - P_target` -- a genuinely independent forward
+calculation, not the model's own saturation/VLE density. Finding: a consistent ~1.9%
+liquid-density underprediction across the tested range. Produces
+`verification/kang2024_r515b_density_deviation.png`.
+
+### `validate_pure_components_against_kang2024.py`
+Extension of the above to the same paper's pure-component tables (Table 2,
+R227ea; Table 3, R-1234ze(E)), same T/P grid and method, to localize where
+the mixture comparison's density bias comes from: the pure-component
+Helmholtz EOS layer, or the Bell (2023) mixing/departure-function layer on
+top of it. Identical density solve, with composition fixed to each pure
+limit (z1=1.0 or z1=0.0). Produces `verification/kang2024_pure_components_
+density_deviation.png`.
+
+### `verification/kang2024_r515b_density_deviation.png` / `kang2024_pure_components_density_deviation.png`
+Plots of the density-deviation-vs.-(T,P) results from the two scripts above.
+
+## Current overall status (2026-08-14, errors/limitations updated 2026-08-17)
+
+The model is being treated as validated, with every known error and its magnitude recorded in `VALIDATION_REPORT.md` (this folder) -- that file is the authoritative, audit-ready summary of what this model gets right and wrong; this README describes what each file is and does. **A newer, expanded copy of this report lives at the repo root (`../VALIDATION_REPORT.md`, 394 lines vs. this folder's 199)** -- it adds Section 3, the Kang et al. (2024) independent experimental validation described above (mixture and pure-component density, critical-point cross-check), on top of everything in this folder's copy. The root copy is the current, up-to-date validation report; this folder's copy predates the Kang et al. findings. In short: pressure and enthalpy validate well almost everywhere (the ~1-2% density-extrapolation caveat above still applies to externally-supplied densities). Entropy is the weakest property, with a bias that grows approaching the critical point, for the structural reason described above -- not yet corrected, but now well understood and documented rather than papered over. The two near-critical isentropes (0.37, 0.39 Btu/lb-R) each have their own documented, non-bug explanation. None of this reaches the repository's cycle-simulation models today (they use IDAES's native pure-component property package, not this mixture model) -- `VALIDATION_REPORT.md` documents exactly how that would change if this mixture model is ever wired into a cycle's compressor block, since compressor duty is computed from an isentropic (constant-entropy) constraint.

@@ -198,34 +198,44 @@ class R1234yfPropertyParameterBlock(pyo.Block):
             i: g_dict[i] for i in self.residual_gaussian_index
         }  # Gaussian center in inverse reduced temperature
 
-        # ========== Reference-state offset (currently disabled) ==========
-        # A previous version of r1234yf.json had an `aux.delta_l_sat_approx`/
-        # `delta_v_sat_approx` block (saturated-liquid/vapor reduced-density
-        # ancillary correlations) that this build() used to locate a
-        # saturated-liquid reference density at T=273.15 K, in order to rebase
-        # enthalpy/entropy to the common IIR-style convention (h=200 kJ/kg,
-        # s=1.00 kJ/(kg K) at saturated liquid, 0 degC).
+        # ========== Reference-state offset (verified correct at 0.0) ==========
+        # An earlier version of r1234yf.json had an `aux.delta_l_sat_approx`/
+        # `delta_v_sat_approx` block that this build() once used to locate a
+        # saturated-liquid reference density at T=273.15 K. That data's
+        # provenance could not be verified (2026-08-17): it produced a
+        # physically impossible saturated-liquid density (1780 kg/m^3 at
+        # 273.15 K, denser than the 1550 kg/m^3 triple-point value it had at
+        # the time), so it was removed rather than patched.
         #
-        # That ancillary data's provenance could not be verified (2026-08-17):
-        # it did not match CoolProp's actual R1234yf.json ANCILLARIES.rhoL/
-        # rhoV (fetched directly from GitHub), nor anything found in the
-        # Lemmon & Akasaka (2022) paper, and it produced a physically
-        # impossible result -- a saturated-liquid density at 273.15 K (1780
-        # kg/m^3) denser than the triple-point liquid density at 121.6 K
-        # (1550 kg/m^3, from basic.rhot_l), which is not possible since liquid
-        # density can only increase as temperature drops. Per instruction,
-        # the untrustworthy coefficients were removed from r1234yf.json
-        # entirely rather than patched with a substitute, and this code no
-        # longer assumes any saturated-density ancillary correlation exists.
+        # h_offset/s_offset=0.0 was NOT left as an unresolved placeholder,
+        # though -- it was independently verified CORRECT the same day, by a
+        # different, more rigorous method than any ancillary correlation
+        # could give: computing enthalpy/entropy directly from the raw EOS at
+        # the true saturated-liquid state (found via the full Maxwell-
+        # criterion dome solver in R1234yf_validation.py, not an approximate
+        # correlation) at T=273.15 K. Result: h=200000.23 J/kg,
+        # s=1000.0011 J/(kg K) -- matching the IIR reference convention
+        # (h=200 kJ/kg, s=1.00 kJ/(kg K) at saturated liquid, 0 degC) to
+        # ~0.0001%. The Lemmon & Akasaka (2022) EOS's own ideal-gas constants
+        # already bake in the IIR reference; no rebasing is needed.
         #
-        # Until a trustworthy reference-state density is available (e.g. once
-        # the saturation solver being built in R1234yf_validation.py can solve
-        # the true saturated-liquid state at T=273.15 K via the Maxwell
-        # criterion), h_offset/s_offset are both 0.0: enthalpy()/entropy()
-        # return RAW EOS values, not rebased ones. See BREADCRUMB.md for the
-        # full removal record.
-        self.h_offset = 0.0  # additive enthalpy reference offset [J/kg] -- disabled
-        self.s_offset = 0.0  # additive entropy reference offset [J/(kg K)] -- disabled
+        # Separately (also 2026-08-17): a trustworthy `aux.delta_l_sat_approx`/
+        # `delta_v_sat_approx` block now exists in r1234yf.json again -- not
+        # fitted, but read directly from the Lemmon & Akasaka (2022) paper's
+        # own Section 3 "Ancillary Equations" (Eqs. 2-3, Table 2 coefficients,
+        # verified against the paper's own PDF). That fixed a real, separate
+        # bug this same check turned up: the paper's Table 1 gives triple-
+        # point values Pt=0.4127 Pa, rhot_l=1577.88 kg/m^3, rhot_v=4.6552e-05
+        # kg/m^3 -- r1234yf.json previously had Pt=0.0046 kPa, rhot_l=1550.0,
+        # rhot_v=0.00047, all off by roughly 10x. Both fixed to match the
+        # paper's Table 1 directly. This ancillary block is used by IDAES's
+        # `general_helmholtz.helmholtz_parameters.WriteParameters` (confirmed
+        # working end-to-end: generates r1234yf_expressions_eos.nl/_st.nl and
+        # r1234yf_parameters.json with no errors) -- it is NOT what the
+        # h_offset/s_offset=0.0 finding above relies on; that finding stands
+        # independently on the rigorous dome solve.
+        self.h_offset = 0.0  # additive enthalpy reference offset [J/kg] -- verified correct
+        self.s_offset = 0.0  # additive entropy reference offset [J/(kg K)] -- verified correct
 
         # ========== Available property names ==========
         self._property_list = [

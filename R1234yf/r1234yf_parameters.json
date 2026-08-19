@@ -1,0 +1,57 @@
+{
+    "nl_file": "r1234yf_expressions_eos.nl",
+    "expr_map": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        13,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        12,
+        11
+    ],
+    "var_map": [
+        0,
+        1,
+        1000,
+        1000
+    ],
+    "param": {
+        "R": 0.07290736012121893,
+        "MW": 114.0416,
+        "T_star": 367.85,
+        "rho_star": 476.69,
+        "Tc": 367.85,
+        "rhoc": 476.69,
+        "Pc": 3384.3499108968686,
+        "Tt": 121.6,
+        "Pt": 0.0004127,
+        "rhot_l": 1577.8796,
+        "rhot_v": 4.6552e-05,
+        "P_min": 1e-12,
+        "P_max": 70000.0,
+        "rho_max": 2500.0,
+        "T_min": 121.6,
+        "T_max": 500.0,
+        "reference_state_offset": [
+            0.0,
+            0.0
+        ]
+    },
+    "have_tcx": false,
+    "nl_file_st": "r1234yf_expressions_st.nl",
+    "var_map_st": [
+        1,
+        1000,
+        1000,
+        1000
+    ],
+    "have_st": true,
+    "have_visc": false
+}

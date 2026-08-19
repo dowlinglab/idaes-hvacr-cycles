@@ -1,8 +1,8 @@
 ################################################################################
 # R1234yf IDAES Helmholtz Property Package
 #
-# Author: Shilpa Narasimhan (snarasi2@nd.edu)
-# Support: Claude AI (claude@anthropic.com)
+# Author: Shilpa Narasimhan 
+# Support: Claude AI
 # Date Created: 2026-08-14
 # 
 # Description:

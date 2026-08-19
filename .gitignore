@@ -1,5 +1,6 @@
 # Temporary breadcrumb/progress files (not committed to repo)
 PROJECT_CONTEXT.md
+BREADCRUMB_R515B_INTEGRATION.md
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -177,3 +178,24 @@ pt_mismatch_*.png
 honeywell_*_plot.png
 *.csv
 for_review/
+
+# --- 2026-08-19: R515B_idaes_package generated outputs (script itself is pushed) ---
+R515B_idaes_package/ancillary_guess_validation_results.json
+R515B_idaes_package/cop_sweep_r515b_vs_r134a.json
+R515B_idaes_package/cop_sweep_r515b_vs_r134a_results.json
+R515B_idaes_package/cop_sweep_r515b_vs_r134a.html
+R515B_idaes_package/cop_vs_ambient_plr_r515b_vs_r134a.html
+R515B_idaes_package/reference_repeatability_results.json
+
+# --- 2026-08-19: superseded root-level R1234yf PLR-benchmark files (predate R1234yf/run_plr_benchmark_r1234yf_vs_r134a.py) ---
+/run_plr_cop_vs_ambient_fixed_r1234yf.py
+/run_plr_only_cop_vs_ambient_with_r1234yf.py
+/vapor_compression_plr_fixed.py
+/cop_vs_ambient_plr_fixed_comparison_r1234yf.png
+/cop_vs_ambient_plr_only_comparison_r1234yf.png
+
+# --- 2026-08-19: R1234yf general_helmholtz merge-registry runtime cache (auto-generated, duplicates other fluids' packages) ---
+R1234yf/_merged_helmholtz_params/
+
+# --- macOS ---
+.DS_Store
