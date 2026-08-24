@@ -4,7 +4,8 @@ methods, benchmarked against the Linde datasheet. This code adds Helmholtz
 model predictions as a baseline.
 
 Five data series are shown on each diagram:
-    1. Linde datasheet         (reference; from NIST REFPROP 9.0)
+    1. Linde datasheet         (reference; 20 points extracted directly
+                                 from the Linde datasheet.)
     2. NIST                     (NIST Shomate + NIST Pc/Tc)
     3. GCGP                     (GCGP Shomate + GCGP Pc/Tc)
     4. SPGP                     (SPGP Shomate + SPGP predicted Tc)
@@ -53,7 +54,8 @@ T_MIN = -130.0 + 273.15   # K, low end of the dome sweep
 
 
 # =============================================================================
-# Linde saturation table (NIST REFPROP 9.0) at the selected points
+# Linde saturation table -- 20 points extracted directly from the Linde
+# datasheet.
 #   (T[C], Psat[bar], hf[kJ/kg], hg[kJ/kg], sf[kJ/kg/K], sg[kJ/kg/K])
 #   hf/hg = saturated liquid/vapor enthalpy ; sf/sg = liquid/vapor entropy
 # =============================================================================

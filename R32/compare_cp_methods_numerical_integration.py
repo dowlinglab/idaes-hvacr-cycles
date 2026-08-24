@@ -1,37 +1,69 @@
 """
-Compare p-h and T-s diagrams for R-32 across several Cp / critical-property
-methods, benchmarked against the Linde datasheet.
+Validate numerical integration of Cp(T) as a substitute for NIST's Shomate
+closed form, benchmarked against the Linde datasheet's 20 saturation points.
 
-Nine data series are shown on each diagram:
+Rationale: GCGP/SPGP collaborators want to supply raw Cp(T) data instead of
+pre-fitted Shomate A-E coefficients. Integrating NIST's OWN Shomate-derived
+Cp(T) and comparing back to NIST's own Shomate-based answer would be
+circular: trapezoidal integration of a smooth polynomial's derivative is
+guaranteed by the fundamental theorem of calculus to reproduce that
+polynomial almost exactly, regardless of whether the integrate-then-fit
+methodology is actually sound on real data. So instead, Cp(T) here is
+sourced from CoolProp's ideal-gas Cp0 (`Cp0molar`, via the Tillner-Roth &
+Yokozeki 1997 EOS) -- independent of NIST's Shomate fit -- evaluated at
+SPGP's own T-grid (`spgp_r32.xlsx`, 233-372 K, 1 K steps) so the mesh
+matches the exact points GCGP/SPGP's real Cp(T) data will eventually use.
+If integrating this independent Cp(T) and interpolating the result lands
+close to Linde's 20-point saturation table, that is real evidence the
+integrate-then-fit pipeline works -- not a calculus tautology.
+
+Known limitation: SPGP's T-grid (233-372 K) doesn't cover Linde's full
+range (down to 143.15 K / -130 C), so 5 of Linde's 20 comparison points
+fall outside it. `np.interp` clamps rather than extrapolates, so those 5
+points should be excluded from (or flagged in) any error comparison, not
+silently included.
+
+Two data series are shown on each diagram:
     1. Linde datasheet         (reference; 20 points extracted directly
                                  from the Linde datasheet.)
-    2. NIST                     (NIST Shomate + NIST Pc/Tc)
-    3. GCGP                     (GCGP Shomate + GCGP Pc/Tc)
-    4. SPGP                     (SPGP Shomate + SPGP predicted Tc)
-    5. SPGP_NIST               (SPGP Shomate + NIST Tc = 351.3 K)
-    6. SPGP_Fathya             (SPGP Shomate + GCGP Tc = 355.354 K)
-    7. SPGP_Shomate_GCGP       (GCGP Shomate + SPGP Tc = 400.898 K)
-    8. SPGP_NIST_crit_prps     (SPGP Shomate + NIST Pc/Tc pair)
-    9. SPGP_Fathya_crit_prps   (SPGP Shomate + GCGP Pc/Tc pair)
+    2. NIST                     (NIST Shomate + NIST Pc/Tc -- baseline)
 
-Each method supplies only its ROW DATA: Pc [bar], Tc [K], and Shomate A..E.
-Shared/fixed: R-32 molar mass, gas constant, the Linde saturation table
-(pressure column used to back out each method's acentric factor at Tr = 0.7;
-enthalpy/entropy columns used as the validation reference), and the IIR
-reference state (sat. liquid at 0 C: h = 200 kJ/kg, s = 1.0 kJ/kg/K).
+A third series -- NIST_numint: NIST's Pc/Tc paired with H(T)/S(T) from
+numerically integrating CoolProp's independent Cp(T) instead of Shomate --
+is added alongside it for direct comparison.
+
+Each baseline method supplies its ROW DATA: Pc [bar], Tc [K], and Shomate
+A..E. Shared/fixed: R-32 molar mass, gas constant, the Linde saturation
+table (pressure column used to back out each method's acentric factor at
+Tr = 0.7; enthalpy/entropy columns used as the validation reference), and
+the IIR reference state (sat. liquid at 0 C: h = 200 kJ/kg, s = 1.0 kJ/kg/K).
 
 Model per method:
     1. Ambrose-Walton saturation pressure (Poling et al., 2001, sec. 7-4).
     2. Peng-Robinson cubic EOS departure h and s (Poling Table 6-3).
-    3. Shomate ideal-gas Cp integration (t = T/1000).
+    3. Ideal-gas H(T)/S(T): NIST's Shomate closed form (t = T/1000) for the
+       baseline series (`PRMethod`); a cumulative-trapezoidal integration of
+       CoolProp's Cp0(T) over SPGP's T-grid, looked up via interpolation,
+       for the numerical-integration series (`PRMethodNumInt`, subclasses
+       `PRMethod` and overrides only h_ideal/s_ideal). No refit back to
+       Shomate form is needed here -- this script is a plain numpy
+       evaluation (no Pyomo/IDAES/IPOPT), so a smooth differentiable closed
+       form isn't required, only a direct lookup.
 
 Author: Shilpa Narasimhan and Claude AI
-Date Created: 07/07/2026
+Date Created: 08/24/2026
 QA/testing: Shilpa Narasimhan
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
+import CoolProp.CoolProp as CP
+
+from scipy.integrate import cumulative_trapezoid
+
+import pandas as pd
+
+
 
 
 # =============================================================================
@@ -51,6 +83,7 @@ H_REF = 200.0      # kJ/kg   IIR reference enthalpy (sat. liquid)
 S_REF = 1.0        # kJ/kg/K IIR reference entropy  (sat. liquid)
 
 T_MIN = -130.0 + 273.15   # K, low end of the dome sweep
+
 
 
 # =============================================================================
@@ -83,6 +116,8 @@ LINDE_SAT = [
     (78,   57.697,   400.38, 428.90,  1.610, 1.691),
 ]
 
+
+
 # Linde arrays for convenience
 L_TC = np.array([r[0] for r in LINDE_SAT])           # deg C
 L_T = L_TC + 273.15                                  # K
@@ -92,6 +127,12 @@ L_HG = np.array([r[3] for r in LINDE_SAT])
 L_SF = np.array([r[4] for r in LINDE_SAT])
 L_SG = np.array([r[5] for r in LINDE_SAT])
 
+def coolprop_cp0(T_array, fluid = "R32", P = 101325.0):
+    return np.array([CP.PropsSI('Cp0molar', 'T', T, 'P', P, fluid) for T in T_array])
+
+spgp_df = pd.read_excel("spgp_r32.xlsx")
+T_mesh = spgp_df["temp"].to_numpy(dtype = float)
+Cp_mesh = coolprop_cp0(T_mesh)
 
 # =============================================================================
 # Method row data (the only per-method input)
@@ -100,22 +141,10 @@ L_SG = np.array([r[5] for r in LINDE_SAT])
 METHODS = [
     {"name": "NIST", "Pc_bar": 57.85,   "Tc": 351.3,
      "A": -6.098682, "B": 179.2200, "C": -122.3682, "D": 32.30207, "E": 0.491361},
-    {"name": "GCGP", "Pc_bar": 50.730,  "Tc": 355.354,
-     "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
-    {"name": "SPGP", "Pc_bar": 50.8106, "Tc": 400.898,
-     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
-    {"name": "SPGP_NIST", "Pc_bar": 50.8106, "Tc": 351.3,
-     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
-    {"name": "SPGP_Fathya", "Pc_bar": 50.8106, "Tc": 355.354,
-     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
-    {"name": "SPGP_Shomate_GCGP", "Pc_bar": 50.8106, "Tc": 400.898,
-     "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0},
-    {"name": "SPGP_NIST_crit_prps", "Pc_bar": 57.85, "Tc": 351.3,
-     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
-    {"name": "SPGP_Fathya_crit_prps", "Pc_bar": 50.730, "Tc": 355.354,
-     "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,  "E": -0.0000361638},
 ]
 
+H_table = cumulative_trapezoid(Cp_mesh, T_mesh, initial=0.0)
+S_table = cumulative_trapezoid(Cp_mesh / T_mesh, T_mesh, initial=0.0)
 
 # =============================================================================
 # Property model for one method
@@ -223,7 +252,13 @@ class PRMethod:
 
     # ---- full dome for plotting ----------------------------------------
     def build_dome(self, n=120):
-        T_grid = np.linspace(T_MIN, 0.99*self.Tc, n)
+        # Sweep all the way to Tc itself, not 0.99*Tc. At T=Tc the PR cubic
+        # has a single root (verified numerically: hf/hg converge to <0.1
+        # kJ/kg apart at Tc vs. ~93 kJ/kg apart at 0.99*Tc), so the dome
+        # tapers to an actual point instead of getting capped by a wide,
+        # visually "flat" straight line connecting two still-far-apart
+        # liquid/vapor branches just short of the critical point.
+        T_grid = np.linspace(T_MIN, self.Tc, n)
         return {
             "name": self.name,
             "T_C": T_grid - 273.15,
@@ -235,12 +270,65 @@ class PRMethod:
         }
 
 
+class PRMethodNumInt(PRMethod):
+    """Same PR + IIR-anchoring model as PRMethod, but H(T)/S(T) come from
+    numerically integrating a Cp(T) table (then interpolating) instead of
+    Shomate's closed form. Only __init__, h_ideal, and s_ideal differ from
+    the base class -- everything else (saturation_pressure, PR departures,
+    hf/hg/sf/sg, build_dome) is inherited unchanged."""
+
+    def __init__(self, name, Pc_bar, Tc, T_mesh, H_table, S_table):
+        self.name = name
+        self.Pc = Pc_bar * 1e5
+        self.Tc = Tc
+        self.T_mesh, self.H_table, self.S_table = T_mesh, H_table, S_table
+
+        self.omega = self._omega_from_linde()
+        self.kappa = 0.37464 + 1.54226 * self.omega - 0.26992 * self.omega**2
+        self.b = Omega_B * R * self.Tc / self.Pc
+
+        # IIR anchoring offsets (sat. liquid at 0 C)
+        P0 = self.saturation_pressure(T_REF)
+        self.h_off = H_REF - self._h_mass(T_REF, P0, "liquid")
+        self.s_off = S_REF - self._s_mass(T_REF, P0, "liquid")
+
+    def h_ideal(self, T):
+        return np.interp(T, self.T_mesh, self.H_table) - np.interp(T_REF, self.T_mesh, self.H_table)
+
+    def s_ideal(self, T, P):
+        S = np.interp(T, self.T_mesh, self.S_table) - np.interp(T_REF, self.T_mesh, self.S_table)
+        return S - R*np.log(P/1e5)
+
+
 # =============================================================================
 # Build every method
 # =============================================================================
 
-methods = [PRMethod(**row) for row in METHODS]
+nist_numint = PRMethodNumInt(name="NIST_numint", Pc_bar=57.85, Tc=351.3,
+                              T_mesh=T_mesh, H_table=H_table, S_table=S_table)
+methods = [PRMethod(**row) for row in METHODS] + [nist_numint]
 domes = [m.build_dome() for m in methods]
+
+# Helmholtz (real R-32 EOS via CoolProp) -- same construction as
+# compare_cp_methods_Helmholtz.py: a dense T-grid up to 0.99*Tc (Helmholtz's
+# own real Tc, so it isn't allowed closer to its critical point than any
+# other series), pulled directly via CP.PropsSI at Q=0 (sat. liquid) / Q=1
+# (sat. vapor). Used only for the plotted curve; the quantitative Linde
+# error table below uses the same L_T points as everything else.
+TC_REAL = 351.255  # real R-32 critical temperature (K), from CoolProp
+# Sweep to TC_REAL itself (see build_dome for why) -- confirmed CoolProp
+# returns valid, converged values for Q=0/Q=1 exactly at Tc (hf/hg differ
+# by ~0.09 kJ/kg there, vs. ~93 kJ/kg at 0.99*Tc), so it's safe.
+T_grid_helm = np.linspace(T_MIN, TC_REAL, 120)
+helm_dome = {
+    "name": "Helmholtz",
+    "T_C": T_grid_helm - 273.15,
+    "Pd": np.array([CP.PropsSI("P", "T", T, "Q", 0, "R32")/1e5 for T in T_grid_helm]),
+    "hf": np.array([CP.PropsSI("H", "T", T, "Q", 0, "R32")/1000.0 for T in T_grid_helm]),
+    "hg": np.array([CP.PropsSI("H", "T", T, "Q", 1, "R32")/1000.0 for T in T_grid_helm]),
+    "sf": np.array([CP.PropsSI("S", "T", T, "Q", 0, "R32")/1000.0 for T in T_grid_helm]),
+    "sg": np.array([CP.PropsSI("S", "T", T, "Q", 1, "R32")/1000.0 for T in T_grid_helm]),
+}
 
 print(f"{'method':>6}{'omega':>10}{'Tc[C]':>10}")
 for m in methods:
@@ -290,6 +378,9 @@ plt.figure()
 plt.plot(np.concatenate([L_HF, L_HG[::-1]]),
          np.concatenate([L_P, L_P[::-1]]),
          "k--o", ms=3, lw=1, label="Linde (datasheet)")
+plt.plot(np.concatenate([helm_dome["hf"], helm_dome["hg"][::-1]]),
+         np.concatenate([helm_dome["Pd"], helm_dome["Pd"][::-1]]),
+         "k-", lw=2, label="Helmholtz (CoolProp)")
 for d, c in zip(domes, colors):
     h_dome = np.concatenate([d["hf"], d["hg"][::-1]])
     P_dome = np.concatenate([d["Pd"], d["Pd"][::-1]])
@@ -311,6 +402,9 @@ plt.figure()
 plt.plot(np.concatenate([L_SF, L_SG[::-1]]),
          np.concatenate([L_TC, L_TC[::-1]]),
          "k--o", ms=3, lw=1, label="Linde (datasheet)")
+plt.plot(np.concatenate([helm_dome["sf"], helm_dome["sg"][::-1]]),
+         np.concatenate([helm_dome["T_C"], helm_dome["T_C"][::-1]]),
+         "k-", lw=2, label="Helmholtz (CoolProp)")
 for d, c in zip(domes, colors):
     s_dome = np.concatenate([d["sf"], d["sg"][::-1]])
     T_dome = np.concatenate([d["T_C"], d["T_C"][::-1]])
