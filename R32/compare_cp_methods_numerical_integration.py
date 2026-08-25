@@ -130,9 +130,25 @@ L_SG = np.array([r[5] for r in LINDE_SAT])
 def coolprop_cp0(T_array, fluid = "R32", P = 101325.0):
     return np.array([CP.PropsSI('Cp0molar', 'T', T, 'P', P, fluid) for T in T_array])
 
+def shomate_cp(T,A,B,C,D,E):
+    t = T/1000.0
+    return A + B*t + C*t**2 + D*t**3 + E/t**2
+
 spgp_df = pd.read_excel("spgp_r32.xlsx")
 T_mesh = spgp_df["temp"].to_numpy(dtype = float)
 Cp_mesh = coolprop_cp0(T_mesh)
+
+# Fit a Shomate-form Cp expression to CoolProp's Cp0, scoped to SPGP's own
+# T-mesh (233-372K) -- honest within this range, unlike borrowing NIST's
+# officially 298-1200K-certified coefficients out of range.
+t_fit = T_mesh / 1000.0
+X_fit = np.column_stack([np.ones_like(t_fit), t_fit, t_fit**2, t_fit**3, 1.0/t_fit**2])
+SPGP_RANGE_A, SPGP_RANGE_B, SPGP_RANGE_C, SPGP_RANGE_D, SPGP_RANGE_E = \
+    np.linalg.lstsq(X_fit, Cp_mesh, rcond=None)[0]
+Cp_mesh_fit = shomate_cp(T_mesh, SPGP_RANGE_A, SPGP_RANGE_B, SPGP_RANGE_C, SPGP_RANGE_D, SPGP_RANGE_E)
+_fit_resid = Cp_mesh - Cp_mesh_fit
+print(f"Shomate fit to CoolProp Cp0 over SPGP range: max resid={np.max(np.abs(_fit_resid)):.5f}, "
+      f"rms={np.sqrt(np.mean(_fit_resid**2)):.5f} J/mol/K")
 
 # =============================================================================
 # Method row data (the only per-method input)
@@ -306,7 +322,10 @@ class PRMethodNumInt(PRMethod):
 
 nist_numint = PRMethodNumInt(name="NIST_numint", Pc_bar=57.85, Tc=351.3,
                               T_mesh=T_mesh, H_table=H_table, S_table=S_table)
-methods = [PRMethod(**row) for row in METHODS] + [nist_numint]
+spgp_shomate_fit = PRMethod(name="SPGP_range_Shomate_fit", Pc_bar=57.85, Tc=351.3,
+                             A=SPGP_RANGE_A, B=SPGP_RANGE_B, C=SPGP_RANGE_C,
+                             D=SPGP_RANGE_D, E=SPGP_RANGE_E)
+methods = [PRMethod(**row) for row in METHODS] + [nist_numint, spgp_shomate_fit]
 domes = [m.build_dome() for m in methods]
 
 # Helmholtz (real R-32 EOS via CoolProp) -- same construction as
@@ -364,6 +383,60 @@ def report_errors(pr_methods):
 
 
 report_errors(methods)
+
+
+# =============================================================================
+# Diagnostics: where does the Linde disagreement actually come from?
+# =============================================================================
+# Two checks, run live so the numbers are reproducible rather than taken on
+# faith: (1) does mesh resolution limit the integration's accuracy, and
+# (2) how big is the ideal-gas (Cp-integration) term vs. the PR-EoS
+# departure term inside hf/hg. Both point the same way: mesh resolution is
+# not the bottleneck, and the departure term dwarfs the ideal-gas term.
+
+def diagnose_mesh_sensitivity(steps=(1, 2, 5, 10, 20, 0.1, 0.01)):
+    print("\nMesh-resolution sensitivity: h_ideal(T) built at different step "
+          "sizes over SPGP's T-range,")
+    print("compared to a near-exact (0.01 K) benchmark. If resolution mattered, "
+          "coarser steps would show large deviations.")
+    T_lo, T_hi = T_mesh.min(), T_mesh.max()
+    test_T = np.array([243.15, 273.15, 303.15, 331.15, 351.0])  # -30, 0, 30, 58, 78 C
+
+    tables = {}
+    for step in steps:
+        Tm = np.arange(T_lo, T_hi + 1e-9, step)
+        Cpm = coolprop_cp0(Tm)
+        Hm = cumulative_trapezoid(Cpm, Tm, initial=0.0)
+        tables[step] = (Tm, Hm)
+
+    def h_ideal_at(step, T):
+        Tm, Hm = tables[step]
+        return np.interp(T, Tm, Hm) - np.interp(T_REF, Tm, Hm)
+
+    ref_step = min(steps)  # finest = "truth"
+    print(f"{'step[K]':>8}{'npts':>7}{'max |diff from finest| [J/mol]':>32}")
+    for step in sorted(steps, reverse=True):
+        n = len(tables[step][0])
+        diffs = [abs(h_ideal_at(step, t) - h_ideal_at(ref_step, t)) for t in test_T]
+        print(f"{step:>8}{n:>7}{max(diffs):>32.6f}")
+
+
+def diagnose_ideal_vs_departure(method, T_points_C=(0, 30, 58, 78)):
+    print(f"\nIdeal-gas term vs. PR departure term inside hf, for '{method.name}':")
+    print(f"{'T[C]':>6}{'h_ideal[J/mol]':>16}{'dh_departure[J/mol]':>21}{'hf[kJ/kg]':>11}")
+    for T_C in T_points_C:
+        T = T_C + 273.15
+        P0 = method.saturation_pressure(T)
+        h_id = method.h_ideal(T)
+        dh, _ = method._departure(T, P0, "liquid")
+        print(f"{T_C:>6.0f}{h_id:>16.1f}{dh:>21.1f}{method.hf(T):>11.2f}")
+    print("(the departure term's magnitude and swing with T dwarf the ideal-gas "
+          "term's -- that's the PR-EoS/departure function, not Cp or its "
+          "integration, and it's unaffected by mesh resolution.)")
+
+
+diagnose_mesh_sensitivity()
+diagnose_ideal_vs_departure(methods[0])   # NIST (Shomate) -- same conclusion holds for NIST_numint
 
 
 # =============================================================================
