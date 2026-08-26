@@ -94,7 +94,8 @@ actual max_residual or a different exception, not this assertion.
 Author: Shilpa Narasimhan
 Support: Claude AI
 
-Date created: 08/11/2026
+Date created: 08/11/2026 (original phase6_final.py)
+This _GCN copy created: 08/26/2026
 """
 from pyomo.environ import value, Var, Constraint
 from vapor_compression_cubic_refstate_GCN import SimpleVaporCompressionCycle as CubicCycle, Mode as CubicMode

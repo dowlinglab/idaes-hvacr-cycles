@@ -11,6 +11,10 @@
 # principle"/"gcn" resolve to real METHODS entries (the Colon group's
 # two new Shomate fits, replacing SPGP) instead of raising
 # `assert method in METHODS`. Used by phase6_final_GCN.py.
+#
+# Date created: original vapor_compression_cubic_refstate.py has no
+# recorded date in its own header. This _GCN copy created: 08/26/2026.
+# Author: Shilpa Narasimhan. Support: Claude AI.
 
 # Import required IDAES-PSE modules
 from idaes.core import FlowsheetBlock

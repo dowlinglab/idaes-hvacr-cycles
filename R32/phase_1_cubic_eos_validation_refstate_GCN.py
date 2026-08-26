@@ -13,7 +13,9 @@ state properties align with the vanilla python code PR_EOS
  for all methods within the Colon group collaboration.
 This file calls pr_eos_lib.py which is a version of the vanilla python code created
 for this project
-Date created: 07/20/2026
+Date created: 07/20/2026 (original phase_1_cubic_eos_validation.py)
+This _GCN copy created: 08/10/2026, repurposed 08/26/2026 for the
+Colon group's first_principle/gcn methods (see note below)
 
 Author: Shilpa Narasimhan
 

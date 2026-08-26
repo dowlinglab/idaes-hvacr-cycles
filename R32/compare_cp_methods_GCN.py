@@ -57,7 +57,8 @@ questionable, the same category of problem the old SPGP had. Not yet
 resolved; awaiting Colon-group confirmation.
 
 Author: Shilpa Narasimhan and Claude AI
-Date Created: 07/07/2026
+Date Created: 07/07/2026 (original compare_cp_methods.py)
+This _GCN copy created: 08/26/2026
 QA/testing: Shilpa Narasimhan
 """
 
