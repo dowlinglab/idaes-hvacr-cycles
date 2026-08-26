@@ -20,21 +20,30 @@ Author: Shilpa Narasimhan
 Support: Claude AI
 
 --- 08/26/2026 ---
-Two new collaborator-supplied Shomate fits ("first_principle", "gcn", from
-spgp_r32.xlsx's a-e coefficients) are being registered as new METHODS
-entries, replacing SPGP -- done in a separate copy,
-phase_1_cubic_eos_validation_refstate_GCN.py, not in this file directly.
-
-Also decided (and confirmed, algebraically): F and G should be set to 0.0
-for every method here, not just the new ones. COP only depends on h/s
-DIFFERENCES within a method's own cycle (compressor work, evaporator/
-condenser heat) and on the compressor's isentropic equality (s_out =
-s_in) -- F/G are constants added uniformly to every state a method
-computes, so they cancel out of every difference and every equality COP
-is built from. This holds for any F/G value, including 0. Not yet
-applied in this file as of this note -- NIST/GCGP/SPGP below still carry
-their originally-calibrated F/G (25.9022/84.9031, 22.9968/146.4716,
--22.1074/222.3130).
+This is the working copy for registering the Colon group's new
+collaborator-supplied Shomate fits. Changes made to METHODS below:
+  - SPGP commented out (not deleted), per "comment out old SPGP."
+  - "first_principle" and "gcn" added -- Shomate-style Cp coefficients
+    from spgp_r32.xlsx's a-e columns, rescaled from raw-T form to this
+    file's t = T/1000 Shomate convention (A=a, B=1000b, C=1e6*c,
+    D=1e9*d, E=e/1e6).
+  - Both new methods' omega is computed from the Colon group's own
+    "pvap" spreadsheet column, read as Pa (not mmHg as labeled -- that
+    literal reading gives Psat > Pc for both methods, physically
+    impossible) and taken as Psat at Tr=0.7*Tc, the standard Pitzer
+    input: omega = -1 - log10(Psat/Pc). Values: first_principle =
+    0.191312, gcn = 0.667570 (replacing earlier Linde-derived
+    placeholders of -0.2385/0.6234). Tr=0.7 is an assumption, not yet
+    confirmed with the collaborator.
+  - F/G set to 0.0 for every method (not just the new ones) -- confirmed
+    algebraically COP-invariant, see phase_1_cubic_eos_validation_
+    refstate.py's 08/26 note for the full reasoning. NIST's F/G updated
+    from its old calibrated 25.9022/84.9031 to 0.0/0.0 for consistency
+    with GCGP/SPGP(commented)/first_principle/gcn.
+  - Even with omega/F-G resolved, first_principle/gcn still show large
+    errors vs Linde in compare_cp_methods_GCN.py (65.99%/46.72% pressure
+    MAPE) -- likely a genuine Tc/Pc data-quality issue, not a units or
+    omega-computation bug. Not yet resolved.
 """
 
 ## Importing packages
@@ -78,32 +87,44 @@ MW = 52.024e-03 # kg/mol Molar mass of CH₂F₂, from standard atomic weights
 Antoine_A = 4.60123
 Antoine_B = 959.89766   # K
 Antoine_C = -13.71589   # K
-## Defining all the properties 
-# "omega" = Pitzer acentric factor, computed per method from the Linde vapor
-# pressure at Tr = 0.7:  omega = -1 - log10(Psat(Tr=0.7) / Pc), using each
-# method's own Tc and Pc. Values: NIST 0.2769, GCGP 0.1711, SPGP -0.2741.
+## Defining all the properties
+# "omega" = Pitzer acentric factor: omega = -1 - log10(Psat(Tr=0.7) / Pc).
+# NIST/GCGP/SPGP: Psat(Tr=0.7) from Linde's own vapor-pressure table, using
+# each method's own Tc and Pc. Values: NIST 0.2769, GCGP 0.1711, SPGP -0.2741.
 # (Negative for SPGP because its Tc is far too high -> a symptom of bad
 #  critical properties, not a real acentric factor.)
+# first_principle/gcn: Psat(Tr=0.7) instead comes directly from the Colon
+# group's own "pvap" spreadsheet column (mislabeled mmHg, actually Pa) --
+# same formula, different Psat source. Values: first_principle 0.191312,
+# gcn 0.667570.
 
 METHODS = {
     "NIST": {"Pc": 57.82e5,  "Tc": 351.3,   "omega": 0.2769,
              "A": -6.098682, "B": 179.2200, "C": -122.3682, "D": 32.30207, "E": 0.491361,
-             "F": 25.9022, "G": 84.9031},
+             "F": 0.0, "G": 0.0},
     "GCGP": {"Pc": 50.730e5, "Tc": 355.354, "omega": 0.1711,
              "A": 14.161,    "B": 0.124,    "C": -6.340e-05, "D": 1.190e-8, "E": 0.0,
-             "F": 22.9968, "G": 146.4716},
-    "SPGP": {"Pc": 50.8106e5,"Tc": 400.898, "omega": -0.2741,
-             "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,
-             "E": -0.0000361638,
-             "F": -22.1074, "G": 222.3130},
+             "F": 0.0, "G": 0.0},
+    # "SPGP": {"Pc": 50.8106e5,"Tc": 400.898, "omega": -0.2741,
+    #          "A": 129.687,   "B": 171.303,  "C": 146.2,      "D": 61.9837,
+    #          "E": -0.0000361638,
+    #          "F": 0.0, "G": 0.0},
+    "first_principle": {"Pc": 52.54216e5, "Tc": 397.6136, "omega": 0.191312,
+             "A": 29.1173, "B": 139.601, "C": 62.8355, "D": 25.3128, "E": -0.000791509,
+             "F": 0.0, "G": 0.0},
+    "gcn": {"Pc": 62.22664e5, "Tc": 329.1245, "omega": 0.667570,
+             "A": 165.655, "B": 104.894, "C": 26.4086, "D": -4.04051, "E": -0.000122942,
+             "F": 0.0, "G": 0.0},
 }
-# F/G calibration: see calibrate_FG.py (offline script) -- solved so that
-# each method's OWN cubic-PR-predicted saturated liquid at T=273.15K (0 C)
-# lands on h=200 kJ/kg, s=1.00 kJ/kg-K (IIR reference state), matching
-# Helmholtz/CoolProp for R32 (both built from Tillner-Roth & Yokozeki 1997).
-# Sanity check: model's own Psat(0C) came out to 8.150 bar (NIST) vs real
-# R32's actual 8.131 bar (CoolProp) -- 0.2% off, confirming the equal-
-# fugacity solve used to derive F/G was implemented correctly.
+# F/G: set to 0.0 for every method (08/26/2026) -- NIST/GCGP/SPGP's F/G were
+# never supplied externally either; they were back-calculated offline via
+# calibrate_FG.py to anchor each method's saturated liquid at 0 C to the IIR
+# reference state (h=200 kJ/kg, s=1.00 kJ/kg-K). Confirmed algebraically that
+# zeroing F/G changes no COP number -- F/G are per-method constants added
+# uniformly to every h/s a method computes, so they cancel out of every h/s
+# DIFFERENCE (compressor work, evaporator/condenser heat) and out of the
+# compressor's isentropic equality (s_out=s_in), which is all COP is built
+# from. Only effect: absolute h/s values are no longer IIR-anchored.
 
 ##############################################################################################
 #           Build the IDAES generic-property configuration for parameters p from methods

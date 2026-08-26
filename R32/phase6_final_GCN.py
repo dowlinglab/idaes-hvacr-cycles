@@ -1,7 +1,7 @@
 """
-phase6_monotonic_warmstart.py -- full COP sweep, ALL FOUR methods
-(Helmholtz, NIST, GCGP, SPGP), each run through phase5_monotonic_warmstart.py's
-run-1/run-2/... monotonic-trend chase:
+phase6_final_GCN.py -- full COP sweep, ALL FIVE methods (Helmholtz, NIST,
+GCGP, first_principle, gcn -- SPGP replaced per the 08/26 note below),
+each run through phase5_monotonic_warmstart.py's run-1/run-2/... chase:
 
   Attempt 1: solve the method normally (no warmstart at all -- generic
              initial guess) at ALL FOUR ambients (10, 15, 20, 25).
@@ -63,20 +63,33 @@ cubic-refstate's, converted to AmountBasis.MOLE so both paths share the
 same basis. relax_enth_bounds and _helm_point were updated accordingly
 (enth_mol, with the H_MAX*M_R32 basis split).
 
-NOT APPLIED HERE (2026-08-26): a separate copy, phase6_final_GCN.py, now
-exists for running the Colon group's two new Shomate-fit methods
-("first_principle", "gcn", replacing "SPGP") through this same
-monotonic-chase sweep -- it imports from vapor_compression_cubic_
-refstate_GCN.py (in turn from phase_1_cubic_eos_validation_refstate_
-GCN.py's METHODS dict) instead of this file's own imports below. This
-file's own METHODS list (line 82) is untouched and still ["Helmholtz",
-"NIST", "GCGP", "SPGP"]. Separately, the decision to zero F/G for every
-method (see phase_1_cubic_eos_validation_refstate.py's 08/26 note) has
-likewise only been applied in the _GCN copies so far, not here --
-confirmed algebraically that doing so would leave every COP number in
-this file's own output unchanged regardless, since COP only depends on
-h/s differences and the compressor's isentropic equality, both of which
-cancel any constant per-method F/G offset.
+COPY (2026-08-26): this file is the _GCN working copy of phase6_final.py,
+for running the Colon group's two new Shomate-fit methods through the
+same monotonic-chase COP sweep as Helmholtz/NIST/GCGP. METHODS (below)
+is ["Helmholtz", "NIST", "GCGP", "first_principle", "gcn"], replacing
+"SPGP". F/G for every method feeding this sweep are 0.0 (see
+phase_1_cubic_eos_validation_refstate_GCN.py's own note) -- confirmed
+algebraically to leave every COP number unchanged from what non-zero
+F/G would have given, since COP only depends on h/s differences and the
+compressor's isentropic equality, both of which cancel any constant
+per-method F/G offset.
+
+Bug found and fixed (2026-08-26): this file's CubicCycle import was
+still pointing at vapor_compression_cubic_refstate (the production
+file), not vapor_compression_cubic_refstate_GCN. The production file's
+property package has no "first_principle"/"gcn" keys, so every call
+with those method names hit vapor_compression_cubic_refstate.py's own
+`assert method in METHODS` and raised immediately -- before any IPOPT
+solve even started. run_cubic()'s try/except caught that and reported
+it as converged=False, which is why a full run showed "FAILED" at
+every ambient, on every one of the 10 monotonic-chase attempts,
+identically -- not a numerical non-convergence at all, just wrong
+wiring. Fixed by importing from vapor_compression_cubic_refstate_GCN
+instead. Not yet re-run after this fix -- first_principle/gcn's earlier
+poor fit to Linde (65.99%/46.72% pressure MAPE, see
+compare_cp_methods_GCN.py) may still cause genuine IPOPT convergence
+trouble even with the import corrected; that would show up now as an
+actual max_residual or a different exception, not this assertion.
 
 Author: Shilpa Narasimhan
 Support: Claude AI
@@ -84,7 +97,7 @@ Support: Claude AI
 Date created: 08/11/2026
 """
 from pyomo.environ import value, Var, Constraint
-from vapor_compression_cubic_refstate import SimpleVaporCompressionCycle as CubicCycle, Mode as CubicMode
+from vapor_compression_cubic_refstate_GCN import SimpleVaporCompressionCycle as CubicCycle, Mode as CubicMode
 from vapor_compression import SimpleVaporCompressionCycle as HelmCycle, Mode as HelmMode
 import pandas as pd
 import os
@@ -94,7 +107,7 @@ AMBIENTS = [10, 15, 20, 25]
 M_R32 = 0.052024  # kg/mol
 H_MAX = 700e3      # J/kg
 MAX_ATTEMPTS = 10
-METHODS = ["Helmholtz", "NIST", "GCGP", "SPGP"]
+METHODS = ["Helmholtz", "NIST", "GCGP", "first_principle","gcn"]
 
 # Phase 3a baseline (PHASE3_NOTES.md Section 1) -- used only as a fallback
 # reference if Helmholtz itself fails to converge in this run; otherwise
