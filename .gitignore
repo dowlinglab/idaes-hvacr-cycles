@@ -2,9 +2,13 @@
 R32/BREADCRUMB_07-20.md
 R32/SLIDE_DECK_BACKUP_2026-08-19.md
 R32/practice_shammah_uncertainty_prop.py
+R32/R32_IDAES_fluid_registration_algorithm.md
 
 # Local editor config -- not for the shared repo
 .vscode/
+
+# macOS Finder metadata
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
