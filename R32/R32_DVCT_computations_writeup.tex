@@ -1,0 +1,466 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}
+\usepackage{amsthm}
+\newtheorem{remark}{Remark}
+\usepackage{siunitx}
+\usepackage[margin=1in]{geometry}
+\title{Computations and Assumptions Behind the R-32 Computations in DVCT}
+\author{Shilpa Narasimhan}
+\date{August 2026}
+\begin{document}
+\maketitle
+\section{Vanilla Python Equations of State Package}\label{sec:vanilla_pkg}
+\subsection{PR equation of state for $P,V,T$}\label{sec:pr_pvt}
+PR and SRK are both special cases of the generalized cubic equation of state, differing only in their $(u, w)$ parameters and $\alpha$-function coefficients; PR was developed specifically to improve upon SRK's known underprediction of liquid density while retaining comparable vapor-phase accuracy \cite{peng1976,soave1972}. The Peng-Robinson parameterized equation of state, written in the generalized-cubic form adopted by IDAES~\cite{idaes_cubic_eos_2026}, is used:
+\begin{equation}\label{eq:PR}
+        P = \frac{RT}{V-b} - \frac{a}{V^2 + ubV + wb^2}
+\end{equation}
+This has an equivalent form in terms of the dimensionless compressibility factor ($Z = \frac{PV}{RT}$):
+\begin{subequations}
+    \begin{align}
+        0&= Z^3 - (1+B-uB)Z^2 + (A-uB-(u-w)B^2)Z - AB - wB^2 - wB^3 \label{eq:cubic_eos}\\
+        A& = \frac{a(T) P}{R^2 T^2}\\
+        B & = \frac{b P}{RT}
+    \end{align}
+\end{subequations}
+The parameters $a$ and $b$ can be computed as:
+\begin{equation}
+\begin{aligned}
+b &= \frac{\Omega_B RT_c}{P_c}\\
+a(T) & = \frac{\Omega_A R^2 T_c^2 \alpha(T)}{P_c}\\
+\alpha(T) & = \Bigg[1 + \kappa (1-\sqrt{\frac{T}{T_c}})\Bigg]^2\\
+\kappa &= 0.37464 + 1.54226\omega -0.26992\omega^2
+\end{aligned}
+\end{equation}
+The expression for $\kappa$ is obtained from~\cite{peng1976} and here $\omega$ is the acentric factor. The constants $u$, $w$, $\Omega_A$, and $\Omega_B$ are universal (the same for every fluid) and are also obtained from~\cite{peng1976}, written here in the generalized form used by~\cite{idaes_cubic_eos_2026}:
+\[
+u = 2, \qquad w = -1, \qquad \Omega_A = 0.45724, \qquad \Omega_B = 0.0778
+\]
+$T_c$, $P_c$, and the acentric factor $\omega$ are fluid-specific and are not universal constants.
+Because of the $1/(V-b)$ singularity in Eq.~\eqref{eq:PR}, only real roots satisfying $Z>B$ (equivalently $V>b$, since $b$ represents the finite excluded molecular volume) are physically admissible; complex roots and any real root with $Z \le B$ are discarded. Solving the cubic equation in Eq.~\eqref{eq:cubic_eos} numerically yields either one real root, corresponding to a single-phase state (vapor, liquid, or supercritical), or three real roots, corresponding to a state within the two-phase region. In the former case, the single real root is the unique physically valid compressibility factor at that $(T,P)$, so no root-selection ambiguity exists. However, labeling that state as liquid, vapor, or supercritical is not determined by the value of the root itself, but by comparing $(T,P)$ against the saturation curve: if $T>T_c$, the state is supercritical and no liquid/vapor distinction applies; otherwise, $P>P_{sat}(T)$ corresponds to liquid and $P<P_{sat}(T)$ corresponds to vapor. In the latter case, the smallest and largest real roots, denoted $Z_L$ and $Z_V$ respectively, correspond to the coexisting saturated liquid and vapor, while the middle root is discarded as mechanically unstable ($\frac{\partial P}{\partial V}>0$).
+\subsubsection{Acentric factor}\label{sec:acentric_factor}
+The acentric factor $\omega$ follows the Pitzer definition~\cite{reid1987}, based on the reduced saturation pressure at a reduced temperature of $T_r=0.7$:
+\begin{equation}
+    \omega \equiv -\log_{10}\left(P_r^{sat}\right)\Big|_{T_r=0.7} - 1, \qquad P_r^{sat} = \frac{P^{sat}(T_r=0.7 \cdot T_c)}{P_c}
+\end{equation}
+$P^{sat}$ at $T_r=0.7$ is obtained from the Linde datasheet for R-32, which is shared across all three parameter sets (NIST, GCGP, SPGP) considered in this work. Since $T_r=0.7\cdot T_c$ falls at a different absolute temperature for each method (because each has its own $T_c$) and the datasheet has no tabulated point at exactly that temperature, $P^{sat}(0.7\,T_c)$ is instead obtained by interpolating between the two nearest tabulated points (see Remark below). For NIST ($T_c=351.3\,\text{K}$, so $T_r=0.7\to-27.24\,^\circ\text{C}$), this falls between the $-30\,^\circ\text{C}$ ($P^{sat}=2.7344\,\text{bar}$) and $-10\,^\circ\text{C}$ ($P^{sat}=5.8263\,\text{bar}$) tabulated points. Although all three methods draw from this same Linde table, each computes a \emph{different} $\omega$, because each uses its own fitted $T_c$ and $P_c$ in the formula above:
+\[
+\omega_{\text{NIST}} = 0.2769, \qquad \omega_{\text{GCGP}} = 0.1711, \qquad \omega_{\text{SPGP}} = -0.2741.
+\]
+SPGP's negative value is not a physically meaningful acentric factor; it is a direct consequence of SPGP's fitted $T_c$ ($400.9\,\text{K}$) being far higher than R-32's actual critical temperature, which artificially depresses the computed reduced saturation pressure at $T_r=0.7$.
+\begin{remark}
+The interpolation of the Linde saturation-pressure data used to determine
+$T_r=0.7$ saturation points is performed in $(1/T,\ \ln P)$ coordinates
+rather than $(T,P)$ directly, following the Clausius-Clapeyron relation
+\cite[sec.\ 7-2]{poling2001}, $d(\ln P)/d(1/T) \approx -\Delta H_{vap}/R$,
+which is approximately linear over a limited temperature range and is the
+same theoretical basis underlying standard vapor-pressure correlations
+such as the Antoine equation.
+\end{remark}
+\begin{remark}
+This Linde-anchored determination of $\omega$ presupposes the availability
+of an experimental saturation-pressure curve for the fluid in question,
+which holds for R-32 as a reference case but not, by construction, for the
+novel and non-standard refrigerant candidates that GCGP and SPGP are
+intended to screen. Neither the Ambrose-Walton correlation~\cite{ambrosewalton1989}
+nor an equal-fugacity flash within the PR equation of state itself can
+substitute for this step, since both require $\omega$ as an input --- through
+the $\omega f^{(1)} + \omega^2 f^{(2)}$ terms in the former, and through $\kappa(\omega)$
+in the latter --- rather than producing it. \textbf{Future novel candidates will explicitly require $P_{sat}$ at $T_r = \frac{T}{T_c} = 0.7$.}
+\end{remark}
+\subsubsection{Computation of Saturation Properties}\label{sec:ambrose_walton}
+The Ambrose-Walton corresponding-states correlation~\cite{ambrosewalton1989}
+is used to compute the saturation pressure $P^{sat}(T)$ once $\omega$ is
+known:
+\begin{subequations}
+\begin{align}
+    \ln P_r^{sat} &= f^{(0)}(T_r) + \omega f^{(1)}(T_r) + \omega^2 f^{(2)}(T_r) \\
+    f^{(0)}(T_r) &= \frac{-5.97616\,\tau + 1.29874\,\tau^{1.5} - 0.60394\,\tau^{2.5} - 1.06841\,\tau^{5}}{T_r} \\
+    f^{(1)}(T_r) &= \frac{-5.03365\,\tau + 1.11505\,\tau^{1.5} - 5.41217\,\tau^{2.5} - 7.46628\,\tau^{5}}{T_r} \\
+    f^{(2)}(T_r) &= \frac{-0.64771\,\tau + 2.41539\,\tau^{1.5} - 4.26979\,\tau^{2.5} + 3.25259\,\tau^{5}}{T_r}
+\end{align}
+\end{subequations}
+where $T_r = \frac{T}{T_c}$, $\tau = 1 - T_r$, and $P_r^{sat} = \frac{P^{sat}}{P_c}$.
+\subsection{Caloric Properties for the Vanilla Python}\label{sec:vanilla_caloric}
+Caloric properties predicted as part of the equation of state package include the Enthalpy $h$ and the entropy $s$. Both expression are computed as a sum of their ideal-gas and departure terms.
+\begin{subequations}
+    \begin{align}
+    h(T,P) &= h^{ig}(T) + \Delta h^{dep}(T,P)\label{eq:vanilla_enthalpy}\\
+    s(T,P) &= s^{ig}(T,P) + \Delta s^{dep}(T,P)\label{eq:vanilla_entropy}
+    \end{align}
+\end{subequations}
+
+The ideal-gas terms are computed from the ideal-gas heat capacity, which in turn is computed from the Shomate Expression~\cite{shomate1954}:
+\begin{equation}\label{eq:shomate_cp}
+    C_p^{ig}(T) = A + Bt + Ct^2 + Dt^3 + \frac{E}{t^2}, \qquad t = \frac{T}{1000}
+\end{equation}
+The Eq.~\eqref{eq:shomate_cp} gives the expressions for the ideal-gas enthalpy and the entropy with respect to the IIR reference state convention: $T_{ref} =\SI{273.15}{\kelvin}$ and $P_{ref} = 1~\text{bar}$~\cite{ashrae2009}.
+\begin{subequations}
+\begin{align}
+    H^{ig}(T) - H^{ig}(T_{ref}) &= \left[At + \frac{B}{2}t^2 + \frac{C}{3}t^3 + \frac{D}{4}t^4 - \frac{E}{t}\right]_{T_{ref}}^{T} \label{eq:ideal_enthalpy} \\
+    S^{ig}(T,P) - S^{ig}(T_{ref},P_{ref}) &= \left[A\ln t + Bt + \frac{C}{2}t^2 + \frac{D}{3}t^3 - \frac{E}{2t^2}\right]_{T_{ref}}^{T} - R\ln\left(\frac{P}{P_{ref}}\right) \label{eq:ideal_entropy}
+\end{align}
+\end{subequations}
+The departure functions for enthalpy and entropy follow the general
+cubic-EoS expressions of Poling et al., Table 6-3~\cite{poling2001}:
+\begin{subequations}
+\begin{align}
+    \frac{H^{ig}-H}{RT} &= -\frac{\Theta - T\dfrac{d\Theta}{dT}}{RT\sqrt{\delta^2-4\varepsilon}}\ln\left[\frac{2V+\delta-\sqrt{\delta^2-4\varepsilon}}{2V+\delta+\sqrt{\delta^2-4\varepsilon}}\right] + 1 - Z \\
+    \frac{S^{ig}-S}{R} &= \frac{1}{R\sqrt{\delta^2-4\varepsilon}}\frac{d\Theta}{dT}\ln\left[\frac{2V+\delta-\sqrt{\delta^2-4\varepsilon}}{2V+\delta+\sqrt{\delta^2-4\varepsilon}}\right] - \ln\left[Z\left(1-\frac{b}{V}\right)\right]
+\end{align}
+\end{subequations}
+For the PR equation of state specifically, $\Theta=a(T)$, $\dfrac{d\Theta}{dT}=\dfrac{da}{dT}$, $\delta=ub$, $\varepsilon=wb^2$, so $\sqrt{\delta^2-4\varepsilon}=b\sqrt{u^2-4w}\equiv b\sigma$. Substituting these and converting $V\to Z$ (via $V=\dfrac{ZRT}{P}$, $b=\dfrac{BRT}{P}$) gives:
+\begin{subequations}
+\begin{align}
+    \Delta h^{dep}(T,P) &= H - H^{ig} = RT(Z-1) + \frac{T\dfrac{da}{dT} - a}{b\sigma}\ln\left[\frac{2Z+B(u+\sigma)}{2Z+B(u-\sigma)}\right]\label{eq:dh_dep} \\
+    \Delta s^{dep}(T,P) &= S - S^{ig} = R\ln(Z-B) + \frac{1}{b\sigma}\frac{da}{dT}\ln\left[\frac{2Z+B(u+\sigma)}{2Z+B(u-\sigma)}\right]\label{eq:ds_dep}
+\end{align}
+\end{subequations}
+where $\sigma \equiv \sqrt{u^2-4w}$. Since $u=2$ and $w=-1$ are universal
+PR constants, $\sigma=\sqrt{8}=2\sqrt{2}$ is itself a universal constant,
+the same for every fluid.
+\section{Translation of the Vanilla Property Package to IDAES Custom Property Package}\label{sec:idaes_translation}
+The custom property package re-declares the PR equation of state and Shomate ideal-gas correlation from Section~\ref{sec:pr_pvt} inside IDAES's generic property framework~\cite{idaes_cubic_eos_2026}. The underlying equations are not re-derived: the PR parameterization ($a(T)$, $b$, $\alpha(T)$, $\kappa$, and the universal constants $u=2$, $w=-1$, $\Omega_A=0.45724$, $\Omega_B=0.0778$, Eq.~\eqref{eq:PR} and the $\kappa$ relation, Section~\ref{sec:pr_pvt}) and the Shomate ideal-gas correlation ($C_p^{ig}$, $H^{ig}$, $S^{ig}$, Eqs.~\eqref{eq:shomate_cp}, \eqref{eq:ideal_enthalpy}, \eqref{eq:ideal_entropy}) are identical to the vanilla implementation. This equivalence was validated numerically, with the package's computed compressibility factor $Z$ matching the vanilla calculation to within $10^{-3}$.
+
+The phase equilibrium computations differ in that they do not use the
+Ambrose--Walton method. The property
+package instead locates the phase boundary directly from the PR equation of state, via the equal-fugacity criterion for vapor-liquid
+equilibrium~\cite[sec.\ 8-2]{poling2001}:
+\begin{equation}\label{eq:equal_fugacity}
+    f^{L}(T,P) = f^{V}(T,P)
+\end{equation}
+for a pure fluid. The fugacity coefficient is defined as $\phi\equiv \frac{f}{P}$. For a pure fluid it follows from the general cubic-EoS fugacity departure function of Poling et al., Table 6-3~\cite{poling2001}:
+\begin{equation}
+    \ln\left(\frac{f}{P}\right) = \frac{\Theta}{RT\sqrt{\delta^2-4\varepsilon}}\ln\left[\frac{2V+\delta-\sqrt{\delta^2-4\varepsilon}}{2V+\delta+\sqrt{\delta^2-4\varepsilon}}\right] - \ln\left[Z\left(1-\frac{b}{V}\right)\right] - (1-Z)
+\end{equation}
+Applying the same PR substitution used in Section~\ref{sec:vanilla_caloric} ($\Theta=a$,
+$\delta=ub$, $\varepsilon=wb^2$, $\sqrt{\delta^2-4\varepsilon}=b\sigma$)
+and converting $V\to Z$ gives:
+\begin{equation}\label{eq:log_fug_coeff}
+    \ln\phi \equiv \ln\left(\frac{f}{P}\right) = (Z-1) - \ln(Z-B) - \frac{A}{B\sigma}\ln\left[\frac{2Z+B(u+\sigma)}{2Z+B(u-\sigma)}\right]
+\end{equation}
+Substituting $f=P\phi$ into
+Eq.~\eqref{eq:equal_fugacity}, the pressure cancels (both phases are
+evaluated at the same $T,P$), so the condition reduces to equality of
+the fugacity coefficients:
+\begin{equation}\label{eq:equal_phi}
+    \phi^{L}(T,P) = \phi^{V}(T,P)
+\end{equation}
+Writing each side explicitly via Eq.~\eqref{eq:log_fug_coeff}, evaluated
+at the liquid root $Z_L$ and vapor root $Z_V$ of Eq.~\eqref{eq:cubic_eos}
+respectively, Eq.~\eqref{eq:equal_phi} becomes:
+\begin{equation}\label{eq:equal_fugacity_explicit}
+\begin{aligned}
+    (Z_L-1) - \ln(Z_L-B) - \frac{A}{B\sigma}\ln\left[\frac{2Z_L+B(u+\sigma)}{2Z_L+B(u-\sigma)}\right] \\
+    = (Z_V-1) - \ln(Z_V-B) - \frac{A}{B\sigma}\ln\left[\frac{2Z_V+B(u+\sigma)}{2Z_V+B(u-\sigma)}\right]
+\end{aligned}
+\end{equation}
+This is a single explicit equation in $Z_L$, $Z_V$, and hence in $T$ and
+$P$ (through $A(T,P)$, $B(T,P)$), coupled with the requirement that
+$Z_L$ and $Z_V$ are themselves both real roots of the same cubic,
+Eq.~\eqref{eq:cubic_eos}, at that $T,P$. For a pure fluid, fixing $T$
+and solving this coupled system for the $P$ that satisfies
+Eq.~\eqref{eq:equal_fugacity_explicit} gives $P^{sat}(T)$ directly from
+the equation of state itself --- no external correlation is used, in
+contrast to the vanilla implementation's reliance on Ambrose-Walton.
+
+IDAES's cubic equation-of-state implementation computes the departure
+enthalpy and entropy via its own \texttt{enth\_mol\_phase} and
+\texttt{entr\_mol\_phase} functions. Each independently implements the same
+general cubic-EoS departure formulas of Poling et al., Table
+6-3~\cite{poling2001} used in Section~\ref{sec:vanilla_caloric} --
+confirmed directly from the source code, whose comments cite the same
+underlying reference (``pg.\ 120'' and ``pg.\ 102, or Sandler, 4th ed.,
+pg.\ 208,'' respectively) -- so they reduce to exactly the same
+expressions already derived there, Eqs.~\eqref{eq:dh_dep}--\eqref{eq:ds_dep}:
+\begin{subequations}
+\begin{align}
+    \Delta h^{dep}(T,P) &= RT(Z-1) + \frac{T\dfrac{da}{dT} - a}{b\sigma}\ln\left[\frac{2Z+B(u+\sigma)}{2Z+B(u-\sigma)}\right] \\
+    \Delta s^{dep}(T,P) &= R\ln(Z-B) + \frac{1}{b\sigma}\frac{da}{dT}\ln\left[\frac{2Z+B(u+\sigma)}{2Z+B(u-\sigma)}\right]
+\end{align}
+\end{subequations}
+These are computed independently of the fugacity coefficient,
+Eq.~\eqref{eq:log_fug_coeff} -- IDAES does not derive one from the other
+internally. Rather, the identity $\ln\phi = G^{dep}/(RT) =
+(\Delta h^{dep}-T\Delta s^{dep})/(RT)$ (from $G=h-TS$~\cite{smithvanness2018})
+is a thermodynamic consistency relation that all three internally-computed
+quantities must satisfy, and do, since each is a standard Table 6-3 form
+evaluated at the same $Z$, $A$, $B$.
+
+No separate departure-function or fugacity-coefficient option is exposed in
+the property-package configuration; selecting \texttt{equation\_of\_state: Cubic}
+with \texttt{CubicType.PR} is sufficient for IDAES to build and evaluate all of the
+above internally, using the same $(u,w,\Omega_A,\Omega_B)$ and $(T_c,P_c,\omega)$
+already fixed in Section~\ref{sec:pr_pvt}.
+
+\subsection{Verifying the IDAES Property Package Against the Vanilla Implementation}\label{sec:idaes_verification}
+The equivalence between the vanilla and IDAES implementations was validated
+numerically: for each method (NIST, GCGP, SPGP), the compressibility factor
+$Z$ computed by the custom IDAES property package matched the vanilla
+calculation to within a tolerance of $10^{-3}$. As an independent
+cross-check on the acentric factor specifically, IDAES's
+\texttt{CoolPropWrapper} database lookup was queried directly for R-32 and
+returned $\omega=0.2769$, matching the Linde-interpolated value used in
+Section~\ref{sec:acentric_factor} to four decimal places.
+\section{Single-Stage Vapor-Compression Cycle Thermodynamic Balances}\label{sec:cycle_balances}
+DVCT models a single-stage vapor-compression cycle as a closed loop of four
+units -- evaporator, compressor, condenser, expansion valve -- carrying a
+single pure-fluid molar flow rate $\dot n$, with no splitting or mixing
+anywhere in the loop. Each unit is modeled as a steady-state, single-inlet
+single-outlet control volume, for which the general first-law energy
+balance (negligible kinetic and potential energy) is:
+\begin{equation}\label{eq:energy_balance}
+    \dot n\, h_{out} = \dot n\, h_{in} + \dot Q + \dot W
+\end{equation}
+where $\dot Q$ is heat added to the fluid and $\dot W$ is shaft work done
+on the fluid.
+
+\paragraph{Evaporator.} No shaft work ($\dot W=0$); Eq.~\eqref{eq:energy_balance}
+reduces to the refrigeration effect:
+\begin{equation}\label{eq:q_evap}
+    \dot Q_{evap} = \dot n\left(h_{evap,out} - h_{evap,in}\right)
+\end{equation}
+The evaporator's operating point is set directly by a specified saturation
+temperature setpoint $T_{evap,set}$ -- the target refrigeration
+temperature -- imposed as an equality constraint on the evaporator
+outlet's saturation (bubble-point) temperature:
+\begin{equation}\label{eq:evap_setpoint}
+    T_{sat}(P_{evap}) = T_{evap,set}
+\end{equation}
+Since $T_{sat}(P)$ is the same monotonic saturation curve established by
+the equal-fugacity condition in Section~\ref{sec:idaes_translation}, fixing
+$T_{evap,set}$ is what actually determines $P_{evap}$ -- the low-side
+pressure is a consequence of the temperature setpoint, not specified
+independently. Physically, $T_{evap,set}$ sits below the temperature of
+the space being cooled by an evaporator approach temperature, the same
+convention used on the condenser side (below). Standard frozen-food
+storage rooms are held at $-18$ to $-20^\circ$C; with an 8-10$^\circ$C
+evaporator approach, this places $T_{evap,set}=-29^\circ$C squarely
+within the range needed for freezer duty, not an unusually low choice.
+The outlet is additionally, optionally constrained to a specified
+superheat $\Delta T_{sh}$ above this same saturation temperature:
+\begin{equation}\label{eq:superheat}
+    T_{evap,out} \ge T_{sat}(P_{evap}) + \Delta T_{sh}, \qquad \Delta T_{sh}=0 \text{ by default}
+\end{equation}
+
+\paragraph{Compressor.} Adiabatic ($\dot Q=0$); Eq.~\eqref{eq:energy_balance}
+gives the actual compression work:
+\begin{equation}\label{eq:w_comp}
+    \dot W_{comp} = \dot n\left(h_{comp,out} - h_{comp,in}\right)
+\end{equation}
+The isentropic efficiency $\eta_s$ relates this to the work required for a
+hypothetical reversible (isentropic) compression to the same outlet
+pressure, $h_{isen}$ evaluated at $s_{isen}=s_{comp,in}$, $P_{isen}=P_{comp,out}$:
+\begin{equation}\label{eq:eta_isen}
+    \eta_s \equiv \frac{h_{isen} - h_{comp,in}}{h_{comp,out} - h_{comp,in}}
+\end{equation}
+
+\paragraph{Condenser.} No shaft work; Eq.~\eqref{eq:energy_balance} gives the
+heat rejected:
+\begin{equation}\label{eq:q_cond}
+    \dot Q_{cond} = \dot n\left(h_{cond,in} - h_{cond,out}\right)
+\end{equation}
+Unlike the evaporator, the condenser's operating point is not set by a
+direct temperature setpoint. Instead it is tied to the ambient
+temperature $T_{amb}$ -- an external boundary condition representing the
+surroundings the condenser rejects heat into, not a state internal to the
+refrigerant loop -- via a specified approach temperature $\Delta T_{app}$,
+the minimum temperature difference required to drive heat rejection into
+that ambient:
+\begin{equation}\label{eq:subcool_approach}
+    T_{sat}(P_{cond}) = T_{amb} + \Delta T_{app}
+\end{equation}
+This is the same approach-temperature convention noted for the evaporator
+above, applied on the rejection side instead of the absorption side. As
+with the evaporator, this fixes $P_{cond}$ through the same saturation
+curve. The outlet is additionally, optionally constrained to a specified
+subcooling $\Delta T_{sc}$ below this saturation temperature:
+\begin{equation}\label{eq:subcool}
+    T_{cond,out} \le T_{sat}(P_{cond}) - \Delta T_{sc}, \qquad \Delta T_{sc}=0 \text{ by default}
+\end{equation}
+
+\paragraph{Expansion valve.} Adiabatic and no shaft work ($\dot Q=\dot W=0$);
+Eq.~\eqref{eq:energy_balance} reduces to the isenthalpic throttling condition:
+\begin{equation}\label{eq:valve_isenthalpic}
+    h_{valve,out} = h_{valve,in}
+\end{equation}
+
+\paragraph{Mass balance.} Since the loop is a single pure-fluid stream with
+no splitting or mixing, $\dot n$ is the same constant at every point in the
+cycle.
+
+\paragraph{Coefficient of performance.} The cycle's COP is defined as the
+ratio of refrigeration effect to compressor work, Eqs.~\eqref{eq:q_evap}
+and~\eqref{eq:w_comp}; since $\dot n$ is common to both and cancels:
+\begin{equation}\label{eq:cop}
+    COP \equiv \frac{\dot Q_{evap}}{\dot W_{comp}} = \frac{h_{evap,out}-h_{evap,in}}{h_{comp,out}-h_{comp,in}}
+\end{equation}
+
+\paragraph{Carnot efficiency.} The second law bounds the COP of any cycle
+operating between the evaporator and condenser saturation temperatures
+(absolute temperature, $T_{evap,set}$ and $T_{sat}(P_{cond})$ from
+Eqs.~\eqref{eq:evap_setpoint} and~\eqref{eq:subcool_approach}):
+\begin{equation}\label{eq:cop_carnot}
+    COP_{Carnot} = \frac{T_{evap,set}}{T_{sat}(P_{cond}) - T_{evap,set}}
+\end{equation}
+and the cycle's second-law efficiency is the ratio of the actual COP,
+Eq.~\eqref{eq:cop}, to this bound:
+\begin{equation}\label{eq:eta_second_law}
+    \eta_{II} \equiv \frac{COP}{COP_{Carnot}}
+\end{equation}
+
+\paragraph{Operating conditions used in this work.} The cycle's ideal-cycle
+modeling approach -- isentropic compression ($\eta_s\approx1$), no superheat or subcooling -- follows Raskar and Mutalikdesai~\cite{raskarmutalikdesai2016}. The evaporator setpoint, $T_{evap,set}=-29^\circ$C, targets standard freezer duty (a $-18$ to
+$-20^\circ$C storage room with an 8-10$^\circ$C evaporator approach); the ambient sweep is restricted to $T_{amb}\in[10,25]^\circ$C, since this deep-evaporator duty becomes solver-limited at higher ambient (a limitation of this operating regime, not of R-32 or the property models themselves). The condenser approach is $\Delta T_{app}=9^\circ$C, and the compressor pressure ratio is bounded at $r_p\le10$.
+
+\begin{remark}
+Physically, $T_{evap,set}$ sits below the temperature of the space being cooled by an evaporator approach temperature, the same convention used for the condenser's approach to ambient, Eq.~\eqref{eq:subcool_approach}.
+Standard frozen-food storage rooms are held at $-18$ to $-20^\circ$C. Applying the same 8-10$^\circ$C approach used elsewhere in this cycle reproduces the chosen setpoint from either direction: forward, $T_{box} -
+\Delta T_{approach}$ gives $-26$ to $-30^\circ$C; backward, $T_{evap,set} +
+\Delta T_{approach} = -29 + 8$ to $-29 + 10 = -21$ to $-19^\circ$C, landing almost exactly on the standard box-temperature range. So
+$T_{evap,set}=-29^\circ$C corresponds to ordinary freezer duty, not an unusually low or arbitrary choice.
+\end{remark}
+
+\section{Algebraic (Sequential) Evaluation of the Ideal Cycle}\label{sec:algebraic_cycle}
+
+Sections~\ref{sec:cycle_balances}'s four balances -- Eqs.~\eqref{eq:q_evap},
+\eqref{eq:w_comp}, \eqref{eq:q_cond}, \eqref{eq:valve_isenthalpic} -- together
+with the equal-fugacity saturation condition of
+Section~\ref{sec:idaes_translation} and the caloric relations of
+Section~\ref{sec:vanilla_caloric}, are the same physics IDAES poses as one
+large simultaneous nonlinear system and solves with IPOPT across all four
+unit models at once. This section shows that, under the operating
+conditions actually used in this work -- $T_{evap,set}$ and $T_{amb}$
+specified, $\Delta T_{sh}=\Delta T_{sc}=0$ (the defaults in
+Eqs.~\eqref{eq:superheat}, \eqref{eq:subcool}) -- the identical system of
+equations can instead be evaluated as a single deterministic forward pass,
+with no simultaneous solve and only one one-dimensional root find. This
+matters specifically for a parameter sensitivity study over $T_c$ and
+$P_c$: a simultaneous IPOPT solve carries path-dependent convergence
+behavior, a nonzero tolerance floor, and warmstart-sensitive failures that
+are unrelated to the underlying physics and can be mistaken for genuine
+sensitivity. The sequential evaluation below removes that ambiguity by
+construction.
+
+\subsection{Why the System Is Sequential Rather Than Simultaneous}\label{sec:why_sequential}
+
+With $T_{evap,set}$ and $T_{amb}$ fixed, Eqs.~\eqref{eq:evap_setpoint} and
+\eqref{eq:subcool_approach} already fix $P_{evap}$ and $P_{cond}$
+independently of every other unknown in the cycle, since $T_{sat}(P)$ is a
+function of $P$ alone (Sections~\ref{sec:ambrose_walton},
+\ref{sec:idaes_translation}). With $\Delta T_{sh}=\Delta T_{sc}=0$, the
+evaporator outlet and condenser outlet are pinned exactly to this
+saturation curve, so their states ($h$, $s$) are likewise fully determined
+without reference to any other unit. The only unit whose outlet state is
+not immediately fixed by a specified temperature is the compressor, whose
+outlet is instead constrained implicitly through $\eta_s$
+(Eq.~\eqref{eq:eta_isen}) and the isentropic condition; and the valve
+outlet, Eq.~\eqref{eq:valve_isenthalpic}, is fixed once the condenser
+outlet enthalpy is known. Because each unit's governing equation involves
+at most one quantity not already determined by the unit immediately
+upstream of it, the four balances can be evaluated once, in order, rather
+than posed as one system in all unknowns simultaneously.
+
+\subsection{State-by-State Evaluation}\label{sec:state_by_state}
+
+\paragraph{Evaporator outlet.} From Eq.~\eqref{eq:evap_setpoint},
+\begin{equation}\label{eq:seq_evap_out}
+    P_{evap} = P^{sat}(T_{evap,set}), \qquad
+    h_{evap,out} = h(T_{evap,set}, P_{evap}), \qquad
+    s_{evap,out} = s(T_{evap,set}, P_{evap})
+\end{equation}
+evaluated at the vapor root $Z_V$ via Eqs.~\eqref{eq:vanilla_enthalpy},
+\eqref{eq:vanilla_entropy}. This is a direct evaluation: no unknown remains
+to be found.
+
+\paragraph{Compressor outlet.} The isentropic outlet temperature $T_{isen}$
+is the unique root of
+\begin{equation}\label{eq:seq_isentropic_root}
+    s\big(T_{isen}, P_{cond}\big) - s_{evap,out} = 0
+\end{equation}
+where $P_{cond}=P^{sat}(T_{sat}(P_{cond}))$ follows from
+Eq.~\eqref{eq:subcool_approach} below and $s(T,P_{cond})$ is evaluated at
+the vapor root $Z_V(T,P_{cond})$. Because $s(T,P_{cond})$ increases
+monotonically with $T$ along the vapor branch, Eq.~\eqref{eq:seq_isentropic_root}
+has exactly one root and can be found by a bracketed one-dimensional search
+(e.g.\ bisection); this is the only implicit step in the entire sequential
+evaluation, and involves a single scalar unknown rather than the coupled
+system IDAES solves. With $h_{isen}=h(T_{isen},P_{cond})$, the actual
+outlet enthalpy follows from Eq.~\eqref{eq:eta_isen} rearranged:
+\begin{equation}\label{eq:seq_comp_out}
+    h_{comp,out} = h_{evap,out} + \frac{h_{isen} - h_{evap,out}}{\eta_s}
+\end{equation}
+
+\paragraph{Condenser outlet.} From Eq.~\eqref{eq:subcool_approach},
+\begin{equation}\label{eq:seq_cond_out}
+    P_{cond} = P^{sat}\!\left(T_{amb}+\Delta T_{app}\right), \qquad
+    h_{cond,out} = h\!\left(T_{amb}+\Delta T_{app},\, P_{cond}\right), \qquad
+    s_{cond,out} = s\!\left(T_{amb}+\Delta T_{app},\, P_{cond}\right)
+\end{equation}
+now evaluated at the liquid root $Z_L$. As with the evaporator outlet,
+this is a direct evaluation, independent of the compressor and valve
+states.
+
+\paragraph{Valve outlet.} From Eq.~\eqref{eq:valve_isenthalpic},
+\begin{equation}\label{eq:seq_valve_out}
+    h_{valve,out} = h_{cond,out}
+\end{equation}
+a direct assignment rather than a calculation. The resulting state lies
+within the two-phase region at $P_{evap}$; its vapor quality $x$ follows
+by flashing at known enthalpy between the saturated-liquid and
+saturated-vapor enthalpies at $T_{evap,set}$ -- the latter already
+available from Eq.~\eqref{eq:seq_evap_out}, the former obtained the same
+way at the liquid root:
+\begin{equation}\label{eq:seq_quality}
+    x = \frac{h_{valve,out} - h_{f}(T_{evap,set})}{h_{g}(T_{evap,set}) - h_{f}(T_{evap,set})}, \qquad
+    s_{valve,out} = s_f(T_{evap,set}) + x\big[s_g(T_{evap,set}) - s_f(T_{evap,set})\big]
+\end{equation}
+where $h_f,\,s_f$ and $h_g,\,s_g$ denote the saturated liquid ($Z_L$) and
+saturated vapor ($Z_V$) properties at $T_{evap,set}$, $P_{evap}$. No
+additional root-finding is required, since $h_{valve,out}$ is already
+known from Eq.~\eqref{eq:seq_valve_out}.
+
+\subsection{Coefficient of Performance}\label{sec:seq_cop}
+
+Substituting $h_{evap,in}=h_{valve,out}$ and
+$h_{comp,in}=h_{evap,out}$ into Eq.~\eqref{eq:cop} recovers the same COP
+definition already established in Section~\ref{sec:cycle_balances}, now
+built entirely from the direct and single-root-find evaluations above:
+\begin{equation}\label{eq:seq_cop}
+    COP = \frac{h_{evap,out} - h_{valve,out}}{h_{comp,out} - h_{evap,out}}
+\end{equation}
+identical in form to Eq.~\eqref{eq:cop}. Because COP is a ratio of
+enthalpy \emph{differences}, the IIR reference-state constant fixed in
+Eq.~\eqref{eq:ideal_enthalpy} cancels exactly in
+Eq.~\eqref{eq:seq_cop}; no reference-state anchoring step is required for
+the sequential evaluation, unlike quantities (e.g.\ absolute $h$ or $s$)
+that are compared directly against a datasheet.
+
+\subsection{Summary}\label{sec:seq_summary}
+
+\begin{center}
+\begin{tabular}{lll}
+\textbf{Quantity} & \textbf{Type of evaluation} & \textbf{Governing equation} \\
+\hline
+$P_{evap}$, $P_{cond}$ & closed-form & Eqs.~\eqref{eq:seq_evap_out}, \eqref{eq:seq_cond_out} \\
+$h_{evap,out}$, $h_{cond,out}$ & closed-form & Eqs.~\eqref{eq:vanilla_enthalpy}--\eqref{eq:vanilla_entropy} \\
+$T_{isen}$ (compressor) & 1-D root find & Eq.~\eqref{eq:seq_isentropic_root}, monotone in $T$ \\
+$h_{comp,out}$ & closed-form, given $T_{isen}$ & Eq.~\eqref{eq:seq_comp_out} \\
+$h_{valve,out}$, $x$ & closed-form & Eqs.~\eqref{eq:seq_valve_out}, \eqref{eq:seq_quality} \\
+\hline
+Full IDAES flowsheet & simultaneous solve (IPOPT) & Section~\ref{sec:idaes_translation}, not used here \\
+\end{tabular}
+\end{center}
+
+The sequential evaluation above uses exactly the same equation-of-state,
+departure-function, and saturation relations already established in
+Sections~\ref{sec:pr_pvt}--\ref{sec:idaes_translation}; nothing about the
+underlying physics changes. What changes is only the numerical procedure
+by which the four states are found: one deterministic forward pass with a
+single bracketed root find, in place of one simultaneous nonlinear system
+solved across all four unit models together.
+
+\bibliographystyle{plain}
+\bibliography{ref}
+\end{document}

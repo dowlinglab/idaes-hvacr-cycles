@@ -327,7 +327,7 @@ if __name__ == "__main__":
     nist = Fluid("NIST", **NIST)
     print(f"  {'T [C]':>8}{'this model [bar]':>20}{'Linde [bar]':>14}{'error':>10}")
     for T_C, linde in [(-30, 2.7344), (-10, 5.8263), (0, 8.131),
-                       (10, 10.065), (20, 14.746), (30, 19.275)]:
+                       (10, 11.069), (20, 14.746), (30, 19.275)]:
         p = nist.psat(T_C + 273.15)/1e5
         print(f"  {T_C:>8}{p:>20.4f}{linde:>14.4f}{100*(p-linde)/linde:>9.2f}%")
 

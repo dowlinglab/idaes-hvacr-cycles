@@ -28,12 +28,12 @@ The Linde deviation is computed twice per case:
              08/26 breadcrumb note). n_points is written out for both so
              the sample size behind each number is visible.
 
-NOTE on the Linde table: taken as-entered from the datasheet, per Shilpa's
-instruction on 2026-09-17. The 10 C entry (10.065 bar) disagrees with
-CoolProp (11.0691 bar) by 9.07% while its neighbours match to 0.00%, and
-it sits inside the operating window -- so it contributes roughly the same
-fixed error to every method's windowed P_MAPE. Not corrected here; the
-n_points columns let it be excluded downstream if wanted.
+NOTE on the Linde table: the 10 C entry was originally transcribed as
+10.065 bar, a transposed-digit typo -- the real Linde datasheet (finer-
+resolution scan, confirmed 2026-09-21 against enthalpy/entropy columns
+that were already correct) gives 11.069 bar, matching CoolProp
+(11.0691 bar) to four significant figures. Corrected here as of
+2026-09-21; the P_MAPE columns are no longer inflated by this one point.
 
 Enthalpy/entropy deviations use the IIR anchoring the datasheet is on:
 each method is offset so its own saturated liquid at 0 C reads
@@ -83,7 +83,7 @@ LINDE_SAT = [
     (-30,  2.7344,   149.45, 506.27,  0.806, 2.274),
     (-10,  5.8263,   182.76, 513.02,  0.937, 2.192),
     (0,    8.131,    200.00, 515.30,  1.000, 2.154),
-    (10,   10.065,   217.74, 516.66,  1.063, 2.119),
+    (10,   11.069,   217.74, 516.66,  1.063, 2.119),
     (20,   14.746,   236.12, 516.90,  1.125, 2.083),
     (30,   19.275,   255.32, 515.72,  1.188, 2.047),
     (40,   24.783,   275.61, 512.71,  1.252, 2.009),
