@@ -199,3 +199,6 @@ R1234yf/_merged_helmholtz_params/
 
 # --- macOS ---
 .DS_Store
+
+# Holding folder for files staged for manual deletion (never auto-committed)
+_to_delete/

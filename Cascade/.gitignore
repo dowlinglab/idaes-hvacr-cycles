@@ -1,2 +1,21 @@
 # Internal working notes (not committed to repo)
 BREADCRUMB.md
+BREADCRUMB_pending.md
+
+# Generated diagnostic outputs -- re-created by run_cascade_sweep*.py and
+# every diagnose_45C*.py script every time they're run; not source, safe
+# to regenerate any time, so not committed. (.csv and .log are already
+# covered by the root .gitignore.)
+diag45*.png
+diag45*.pdf
+cop_vs_ambient*.png
+cop_vs_ambient*.pdf
+cascade_vs_single_stage.png
+cascade_vs_single_stage_MATCHED.csv
+
+# IPOPT/ASL solver scratch files, and the runtime-generated copy of the
+# R1234yf parameter file (the real source lives in
+# R1234yf/r1234yf_general_helmholtz.json -- this one is a build byproduct)
+*.nl
+r1234yf_parameters.json
+_merged_helmholtz_params/
