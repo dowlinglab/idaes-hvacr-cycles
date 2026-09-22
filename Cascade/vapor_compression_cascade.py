@@ -1116,6 +1116,9 @@ class CascadeCycle:
         Pyomo raises ValueError("Cannot load a SolverResults object with bad
         status: error") when IPOPT exits with an error status, which would
         otherwise abort a whole ambient sweep on one bad point.
+
+        `ok` is True only for a strict "optimal" exit. A "maxIterations" exit
+        is handled separately in optimize_COP (feasibility-based acceptance).
         """
         try:
             results = solver.solve(model, tee=tee)
@@ -1124,8 +1127,42 @@ class CascadeCycle:
         except Exception as exc:  # noqa: BLE001 -- deliberately broad
             return f"error: {type(exc).__name__}", False
 
+    @staticmethod
+    def _max_constraint_violation(model):
+        """Largest amount any active constraint misses its bounds by,
+        evaluated straight from the model (independent of IPOPT's own
+        reporting). Used by optimize_COP to decide whether a max_iter exit
+        is still a physically valid point."""
+        max_viol = 0.0
+        for con in model.component_data_objects(Constraint, active=True, descend_into=True):
+            try:
+                body = value(con.body)
+            except Exception:  # noqa: BLE001 -- unevaluable -> treat as failed
+                return float("inf")
+            if con.has_lb():
+                max_viol = max(max_viol, value(con.lower) - body)
+            if con.has_ub():
+                max_viol = max(max_viol, body - value(con.upper))
+        return max_viol
+
     def optimize_COP(self, verbose=False, initialize=True, optimize=True):
         solver = get_solver()
+        # Strict tolerance (tol=1e-6) at every point. This gives the correct,
+        # boundary-optimal answer everywhere we've checked.
+        #
+        # History (full detail in BREADCRUMB.md, 2026-09-22 entries):
+        # - Blanket tol=1e-4: REJECTED. Fixed R1234yf @ 45C but silently
+        #   degraded R134a @ 30/35C and R1234yf @ 25/30C to worse answers.
+        # - Restart-at-tol=1e-4-on-failure fallback: REMOVED. At 45C it
+        #   knocked the good point into a worse one (COP 1.6449).
+        # - IPOPT acceptable_tol (1e-4, then 1e-1): REMOVED. Never fired.
+        #   At 45C, dual infeasibility sawtooths with growing peaks (up to
+        #   0.71) and resets, so no threshold survives 15 iterations in a
+        #   row. (Also: this IPOPT 3.13.2 build rejects `acceptable_iter`
+        #   as an unknown keyword and aborts the whole solve.)
+        #
+        # What handles 45C instead: the feasibility-based acceptance check
+        # after the solve (see below).
         solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver': 'ma57'}
         fs = self.model.fs
 
@@ -1188,6 +1225,30 @@ class CascadeCycle:
         for _ in range(10):
             if not ok:
                 tc, ok = self._safe_solve(solver, self.model, tee=verbose)
+
+        # Feasibility-based acceptance for a max_iter exit. IPOPT can reach
+        # the right point and then fail to CERTIFY it: at R1234yf @ 45C the
+        # objective is frozen (COP ~1.684), constraint violation ~1e-10 and
+        # complementarity ~1e-7, but dual infeasibility (tied to the SH
+        # floor being exactly active) never settles. So check feasibility
+        # ourselves, straight from the model. Only applies to
+        # "maxIterations" -- an error or infeasible exit is never accepted.
+        # Points that reach "optimal" never get here, so they're unaffected.
+        self.accepted_on_feasibility = False
+        if not ok and tc == "maxIterations":
+            max_viol = self._max_constraint_violation(self.model)
+            if max_viol < 1e-6:
+                ok = True
+                self.accepted_on_feasibility = True
+                tc = f"maxIterations (accepted: max constraint violation {max_viol:.2e})"
+                self.logger.warning(
+                    "IPOPT hit max_iter without certifying optimal, but the point "
+                    "is feasible (max constraint violation %.2e < 1e-6) -- "
+                    "ACCEPTED on feasibility. COP=%.4f", max_viol, value(fs.cop))
+            else:
+                self.logger.error(
+                    "IPOPT hit max_iter AND the point is not feasible (max "
+                    "constraint violation %.2e >= 1e-6) -- rejected", max_viol)
 
         if ok:
             self.logger.info("Optimization successful")
