@@ -2595,13 +2595,23 @@ def _isentrope_2eq_residual(vars_, d1: Dict, d2: Dict, z1: float, p_target: floa
     point outside the dome has NEITHER T nor rho fixed -- only s is --
     so each point needs [P(T,rho,z1)=P_target, s(T,rho,z1)=s_target]
     solved jointly for (T,rho) via scipy.optimize.root.
+
+    NORMALIZED 2026-08-14: both residuals are now RELATIVE (dimensionless),
+    matching the pattern already used by the original saturation solver's
+    acceptance gates (r_P, r_mu). Raw residuals mixed Pa-scale (~1e5) with
+    J/(mol*K)-scale (~1e2) -- a >1e5x mismatch that made hybr's numerical
+    Jacobian badly conditioned, causing an immediate zero-movement failure
+    even from a good seed (see diagnose_isentrope_026.py 0.26 Btu/lb-R trace,
+    2026-08-14: sol0.success=False with dT=dRho=0.0000 on the very first solve).
     """
     t_k, rho = vars_
     if t_k <= 0 or rho <= 0:
         return [1.0e12, 1.0e12]  # guard against the solver stepping into an unphysical region
     st = mix_state(d1, d2, t_k, rho, z1)
     s = _mix_entropy_direct(d1, d2, t_k, rho, z1)
-    return [st.p_pa - p_target, s - s_target]
+    r_p = (st.p_pa - p_target)/p_target
+    r_s = (s - s_target)/s_target
+    return [r_p, r_s]
 
 
 def compute_isentrope_liquid_side(

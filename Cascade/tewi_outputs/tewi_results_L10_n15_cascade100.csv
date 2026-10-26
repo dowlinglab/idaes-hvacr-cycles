@@ -1,0 +1,49 @@
+Case,City,Cycle,Refrigerant,E_kWh_per_yr,leaks_t,end_of_life_t,electricity_t,TEWI_t
+No limit,"Chicago, IL",Single stage,R134a,74481,275.400,55.080,464.243,794.723
+No limit,"Chicago, IL",Cascade (with CO2),R134a,76834,275.490,55.098,478.909,809.497
+No limit,"Chicago, IL",Single stage,R1234yf,76752,0.090,0.018,478.398,478.506
+No limit,"Chicago, IL",Cascade (with CO2),R1234yf,77721,0.180,0.036,484.438,484.654
+No limit,"Chicago, IL",Single stage,R515B,75083,57.897,11.579,467.995,537.471
+No limit,"Chicago, IL",Cascade (with CO2),R515B,76867,57.987,11.597,479.115,548.699
+No limit,"Atlanta, GA",Single stage,R134a,87164,275.400,55.080,501.724,832.204
+No limit,"Atlanta, GA",Cascade (with CO2),R134a,88620,275.490,55.098,510.104,840.692
+No limit,"Atlanta, GA",Single stage,R1234yf,90414,0.090,0.018,520.431,520.539
+No limit,"Atlanta, GA",Cascade (with CO2),R1234yf,89881,0.180,0.036,517.363,517.579
+No limit,"Atlanta, GA",Single stage,R515B,88083,57.897,11.579,507.013,576.489
+No limit,"Atlanta, GA",Cascade (with CO2),R515B,88723,57.987,11.597,510.697,580.281
+No limit,"San Diego, CA",Single stage,R134a,85014,275.400,55.080,248.723,579.203
+No limit,"San Diego, CA",Cascade (with CO2),R134a,86865,275.490,55.098,254.138,584.726
+No limit,"San Diego, CA",Single stage,R1234yf,87763,0.090,0.018,256.766,256.874
+No limit,"San Diego, CA",Cascade (with CO2),R1234yf,87958,0.180,0.036,257.336,257.552
+No limit,"San Diego, CA",Single stage,R515B,85737,57.897,11.579,250.838,320.314
+No limit,"San Diego, CA",Cascade (with CO2),R515B,86920,57.987,11.597,254.299,323.883
+No limit,"Tucson, AZ",Single stage,R134a,98132,275.400,55.080,471.515,801.995
+No limit,"Tucson, AZ",Cascade (with CO2),R134a,98449,275.490,55.098,473.038,803.626
+No limit,"Tucson, AZ",Single stage,R1234yf,102701,0.090,0.018,493.468,493.577
+No limit,"Tucson, AZ",Cascade (with CO2),R1234yf,100175,0.180,0.036,481.331,481.547
+No limit,"Tucson, AZ",Single stage,R515B,99509,57.897,11.579,478.131,547.607
+No limit,"Tucson, AZ",Cascade (with CO2),R515B,98656,57.987,11.597,474.033,543.617
+21 C limit,"Chicago, IL",Single stage,R134a,85142,275.400,55.080,530.693,861.173
+21 C limit,"Chicago, IL",Cascade (with CO2),R134a,86932,275.490,55.098,541.851,872.439
+21 C limit,"Chicago, IL",Single stage,R1234yf,87954,0.090,0.018,548.221,548.329
+21 C limit,"Chicago, IL",Cascade (with CO2),R1234yf,88047,0.180,0.036,548.800,549.017
+21 C limit,"Chicago, IL",Single stage,R515B,85887,57.897,11.579,535.337,604.813
+21 C limit,"Chicago, IL",Cascade (with CO2),R515B,86995,57.987,11.597,542.243,611.827
+21 C limit,"Atlanta, GA",Single stage,R134a,90983,275.400,55.080,523.706,854.186
+21 C limit,"Atlanta, GA",Cascade (with CO2),R134a,92200,275.490,55.098,530.711,861.299
+21 C limit,"Atlanta, GA",Single stage,R1234yf,94447,0.090,0.018,543.645,543.753
+21 C limit,"Atlanta, GA",Cascade (with CO2),R1234yf,93553,0.180,0.036,538.499,538.715
+21 C limit,"Atlanta, GA",Single stage,R515B,91956,57.897,11.579,529.307,598.783
+21 C limit,"Atlanta, GA",Cascade (with CO2),R515B,92317,57.987,11.597,531.385,600.969
+21 C limit,"San Diego, CA",Single stage,R134a,86246,275.400,55.080,252.327,582.807
+21 C limit,"San Diego, CA",Cascade (with CO2),R134a,88001,275.490,55.098,257.462,588.050
+21 C limit,"San Diego, CA",Single stage,R1234yf,89071,0.090,0.018,260.592,260.701
+21 C limit,"San Diego, CA",Cascade (with CO2),R1234yf,89127,0.180,0.036,260.756,260.972
+21 C limit,"San Diego, CA",Single stage,R515B,86985,57.897,11.579,254.489,323.965
+21 C limit,"San Diego, CA",Cascade (with CO2),R515B,88061,57.987,11.597,257.637,327.221
+21 C limit,"Tucson, AZ",Single stage,R134a,99382,275.400,55.080,477.521,808.001
+21 C limit,"Tucson, AZ",Cascade (with CO2),R134a,99608,275.490,55.098,478.607,809.195
+21 C limit,"Tucson, AZ",Single stage,R1234yf,104026,0.090,0.018,499.835,499.943
+21 C limit,"Tucson, AZ",Cascade (with CO2),R1234yf,101367,0.180,0.036,487.059,487.275
+21 C limit,"Tucson, AZ",Single stage,R515B,100776,57.897,11.579,484.219,553.695
+21 C limit,"Tucson, AZ",Cascade (with CO2),R515B,99821,57.987,11.597,479.630,549.214

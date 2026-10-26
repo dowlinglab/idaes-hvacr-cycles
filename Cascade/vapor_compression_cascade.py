@@ -52,6 +52,7 @@ from idaes.core import FlowsheetBlock
 from idaes.core.solvers import get_solver
 from idaes.core.util.model_statistics import degrees_of_freedom
 from idaes.core.util.scaling import calculate_scaling_factors
+import idaes.core.util.scaling as iscale
 from idaes.core.util.initialization import propagate_state
 from idaes.core.util import DiagnosticsToolbox
 from idaes.models.properties.general_helmholtz import (
@@ -67,7 +68,7 @@ from idaes.models.unit_models import (
     Heater, Compressor, PressureChanger,
 )
 from pyomo.environ import (
-    ConcreteModel, value, Objective, maximize, 
+    ConcreteModel, value, Objective, maximize, Suffix,
     TransformationFactory, Param, Var, Constraint, units as pyunits,
 )
 from pyomo.network import Arc
@@ -547,8 +548,20 @@ class CascadeCycle:
             expr=fs.hot_evaporator.control_volume.properties_out[0].temperature_sat
             == fs.cold_condenser.control_volume.properties_out[0].temperature_sat - fs.cascade_approach_dT)
 
+        # Cold end of the cascade HX (counterflow): CO2 liquid leaves where
+        # the R1234yf/R134a enters at T_CAS,E. CO2 can't leave colder than
+        # its coolant, so: CO2 out >= T_CAS,E + cascade_cold_end_dT.
+        # Without this the CO2 subcooling (up to 8 K) could exceed the 3 K
+        # gap -> temperature cross, COP too high (found 10/10).
+        fs.cascade_cold_end_dT = Param(initialize=1.0, units=pyunits.K, mutable=True)
+        fs.cascade_cold_end_constraint = Constraint(
+            doc="Cascade HX cold-end approach (no temperature cross)",
+            expr=fs.cold_condenser.control_volume.properties_out[0].temperature
+            >= fs.hot_evaporator.control_volume.properties_in[0].temperature + fs.cascade_cold_end_dT)
+
         fs.cascade_energy_balance.deactivate()
         fs.cascade_approach_constraint.deactivate()
+        fs.cascade_cold_end_constraint.deactivate()
 
     # ------------------------------------------------------------------
     # Diagrams
@@ -744,6 +757,7 @@ class CascadeCycle:
         return low, high
 
     def set_specifications(self, hot=None, cold=None, cascade_approach_dT=3.0,
+                            cascade_cold_end_dT=1.0,
                             cascade_T_window_C=(-15.0, 20.0), bound_margin_frac=0.30,
                             plr=None, cd=None, debug_disable_arc_pressure_eq=False):
         """hot / cold are dicts overriding `_LOOP_SPEC_DEFAULTS` for that
@@ -773,6 +787,16 @@ class CascadeCycle:
                 merged["superheating_max"] = self.fluids[role]["superheat_max"]
             if merged["subcooling_max"] is None:
                 merged["subcooling_max"] = self.fluids[role]["subcool_max"]
+            if role == "cold":
+                # CO2 subcooling can't exceed gap - cold-end approach (see
+                # cascade_cold_end_constraint). Clip a larger floor so old
+                # callers stay feasible, and say so.
+                sc_room = cascade_approach_dT - cascade_cold_end_dT
+                if merged["subcooling"] is not None and merged["subcooling"] > sc_room:
+                    self.logger.warning(
+                        "Cold-loop subcooling floor %.2f K > room in cascade HX "
+                        "(%.2f K); clipped to %.2f K", merged["subcooling"], sc_room, max(sc_room, 0.0))
+                    merged["subcooling"] = max(sc_room, 0.0)
 
             # --- option (c): derive pressure bounds from THIS fluid's own
             # saturation curve over the range this loop actually operates in.
@@ -802,8 +826,10 @@ class CascadeCycle:
             self._set_loop_specifications(role, merged, debug_disable_arc_pressure_eq)
 
         fs.cascade_approach_dT.set_value(cascade_approach_dT)
+        fs.cascade_cold_end_dT.set_value(cascade_cold_end_dT)
         fs.cascade_energy_balance.activate()
         fs.cascade_approach_constraint.activate()
+        fs.cascade_cold_end_constraint.activate()
 
         calculate_scaling_factors(self.model)
 
@@ -963,6 +989,13 @@ class CascadeCycle:
             compressor.outlet.vapor_frac[0].fix(1.0)
             compressor.control_volume.properties_out[0.0].eq_complementarity.deactivate()
             compressor.vapor_constraint.activate()
+            # Isentropic (ideal) discharge state gets the same treatment as the
+            # real outlet. Its vapor_frac had no bounds, so on the dome IPOPT
+            # could park it at x > 1 with T = T_sat. That understates
+            # isentropic work and inflates COP (seen 10/09: x = 1.043 in a
+            # limited-memory run). Discharge is always superheated vapor here.
+            compressor.properties_isentropic[0.0].vapor_frac.fix(1.0)
+            compressor.properties_isentropic[0.0].eq_complementarity.deactivate()
 
         compressor.ratioP.setub(max_pressure_ratio)
         compressor.ratioP.setlb(1.1)
@@ -1013,7 +1046,9 @@ class CascadeCycle:
             condenser.outlet.vapor_frac[0].fix(0.0)
             condenser.control_volume.properties_out[0.0].eq_complementarity.deactivate()
 
-        if subcooling > 0.1:
+        # >= 0 (was > 0.1): a 0 K floor still needs T_out <= T_sat, else a
+        # TPX liquid state could sit above saturation.
+        if subcooling is not None and subcooling >= 0:
             condenser.subcooling.set_value(subcooling)
             condenser.subcooling_constraint.activate()
             condenser.subcooling_max.set_value(subcooling_max)
@@ -1145,6 +1180,125 @@ class CascadeCycle:
                 max_viol = max(max_viol, body - value(con.upper))
         return max_viol
 
+    def _snapshot_values(self):
+        """Current value of every variable, so a solve can be undone."""
+        return [(v, v.value) for v in self.model.component_data_objects(Var, descend_into=True)]
+
+    @staticmethod
+    def _restore_values(snapshot):
+        """Put variable values back from _snapshot_values()."""
+        for v, val in snapshot:
+            v.set_value(val, skip_validation=True)
+
+    def _apply_fallback_scaling(self):
+        """Scaling factors for the fallback solve (IPOPT user-scaling).
+
+        Why each one (found 10/09, R1234yf/CO2 at 45 C):
+        - eq_sat at the valve outlets: the Helmholtz package already writes
+          this as P*1e-6 == Psat*1e-6 AND gives it a 1e-9 factor. Under
+          user-scaling that is applied twice -> a near-zero row. Set to 1.
+        - compute_cop, cascade_energy_balance: written here, no factor.
+          Their terms are work/heat in W (~1e5), which IDAES scales by 1e-6.
+          Match that.
+        - hot/cold P_high, P_low: pressures in Pa with no factor. Match the
+          1e-6 IDAES uses for every other pressure.
+        Only used by the fallback; the default solve ignores these factors.
+        """
+        fs = self.model.fs
+        for role in ("hot", "cold"):
+            valve = getattr(fs, f"{role}_expansion_valve")
+            iscale.set_scaling_factor(valve.control_volume.properties_out[0.0].eq_sat, 1.0)
+            for name in ("P_high", "P_low"):
+                iscale.set_scaling_factor(getattr(fs, f"{role}_{name}"), 1e-6)
+        iscale.set_scaling_factor(fs.compute_cop, 1e-6)
+        iscale.set_scaling_factor(fs.cascade_energy_balance, 1e-6)
+
+    def _scaled_fallback_solve(self, start_values, verbose=False):
+        """Re-solve from the starting point with IPOPT user-scaling.
+
+        Same two stages as optimize_COP (warm-up without objective, then
+        maximize COP). Restarting from the start point matters: restarting
+        from the stuck point did not certify in testing.
+        Returns (termination_condition_str, ok).
+        """
+        fs = self.model.fs
+        self._restore_values(start_values)
+        self._apply_fallback_scaling()
+        solver = get_solver()
+        solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver': 'ma57',
+                          'nlp_scaling_method': 'user-scaling'}
+
+        fs.compute_cop.deactivate()
+        fs.obj.deactivate()
+        self._safe_solve(solver, self.model, tee=verbose)
+        try:
+            work_total = (value(fs.hot_compressor.work_mechanical[0])
+                          + value(fs.cold_compressor.work_mechanical[0]))
+            if work_total:
+                fs.cop.set_value(value(fs.cold_evaporator.heat_duty[0]) / work_total)
+        except Exception:  # noqa: BLE001 -- warm start only
+            pass
+
+        fs.compute_cop.activate()
+        fs.obj.activate()
+        return self._safe_solve(solver, self.model, tee=verbose)
+
+    def _pin_and_verify(self, verbose=False, grad_tol=1e-5, max_newton=6, h=0.25):
+        """Certify the free optimum through T_CAS,E, the one flat variable.
+
+        Why: on the flat COP peak the 5-DOF solve can sit at the right point
+        and still never certify (10/10: R1234yf at 50 C, all IPOPT dual
+        error in one term). Pinning T_CAS,E leaves a 4-DOF problem that
+        certifies in a few iterations, and the pin's multiplier is exactly
+        dCOP/dT_CAS,E. Pinned solve optimal + multiplier ~ 0 means the full
+        5-DOF optimality conditions hold.
+
+        How: start at the current T_CAS,E. Pin, solve, read the multiplier
+        (g). If |g| < grad_tol (COP per K), done. Otherwise estimate the
+        curvature from a second pin at T + h and take a Newton step.
+        grad_tol 1e-5 COP/K is about 0.01 K from the peak, COP loss ~1e-8.
+
+        Always leaves the pin deactivated (DOF back to 5).
+        Returns (ok, T_K, g).
+        """
+        fs = self.model.fs
+        evap = fs.hot_evaporator
+        made_suffix = not hasattr(self.model, "dual")
+        if made_suffix:
+            self.model.dual = Suffix(direction=Suffix.IMPORT)
+        solver = get_solver()
+        solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver': 'ma57'}
+
+        def pinned(T):
+            evap.T_sat_set.set_value(T)
+            evap.evap_sat_constraint.activate()
+            _, ok_ = self._safe_solve(solver, self.model, tee=verbose)
+            return ok_, self.model.dual.get(evap.evap_sat_constraint, None)
+
+        T = value(evap.control_volume.properties_out[0].temperature_sat)
+        ok, g = False, None
+        try:
+            for _ in range(max_newton):
+                ok1, g1 = pinned(T)
+                if not ok1 or g1 is None:
+                    break
+                if abs(g1) < grad_tol:
+                    ok, g = True, g1
+                    break
+                ok2, g2 = pinned(T + h)
+                if not ok2 or g2 is None:
+                    break
+                H = (g2 - g1) / h
+                if not np.isfinite(H) or H == 0:
+                    break
+                step = max(-5.0, min(5.0, -g1 / H))  # cap at 5 K per step
+                T = T + step
+        finally:
+            evap.evap_sat_constraint.deactivate()
+            if made_suffix:
+                self.model.del_component(self.model.dual)
+        return ok, T, g
+
     def optimize_COP(self, verbose=False, initialize=True, optimize=True):
         solver = get_solver()
         # Strict tolerance (tol=1e-6) at every point. This gives the correct,
@@ -1165,6 +1319,9 @@ class CascadeCycle:
         # after the solve (see below).
         solver.options = {'max_iter': 1000, 'tol': 1e-6, 'linear_solver': 'ma57'}
         fs = self.model.fs
+        # Starting point, kept so the scaled fallback (below) can restart from
+        # it instead of from wherever the default solve got stuck.
+        start_values = self._snapshot_values()
 
         if initialize:
             # Feasibility pre-solve (objective off) purely as a warm start.
@@ -1225,6 +1382,42 @@ class CascadeCycle:
         for _ in range(10):
             if not ok:
                 tc, ok = self._safe_solve(solver, self.model, tee=verbose)
+
+        # Scaled fallback: only runs when the default solve did NOT certify.
+        # Cases that already converge never reach this, so their results are
+        # unchanged. If the fallback also fails, the default solve's end
+        # state is put back, so behavior after this point is as before.
+        self.used_scaling_fallback = False
+        if not ok and optimize:
+            failed_values = self._snapshot_values()
+            tc2, ok2 = self._scaled_fallback_solve(start_values, verbose)
+            if ok2:
+                tc, ok = tc2, ok2
+                self.used_scaling_fallback = True
+                self.logger.warning(
+                    "Default solve did not certify; scaled fallback certified "
+                    "optimal. COP=%.5f", value(fs.cop))
+            else:
+                self._restore_values(failed_values)
+                self.logger.warning("Scaled fallback also failed (%s)", tc2)
+
+        # Pin-and-verify: last tier, only if both solves above failed. Skipped
+        # when the caller already pinned T_CAS,E (evap_sat_constraint active).
+        # If it fails, the default solve's end state is put back again.
+        self.used_pin_verify = False
+        if (not ok and optimize
+                and not fs.hot_evaporator.evap_sat_constraint.active):
+            failed_values = self._snapshot_values()
+            ok3, T3, dual3 = self._pin_and_verify(verbose)
+            if ok3:
+                ok, tc = True, "optimal (pin-verified)"
+                self.used_pin_verify = True
+                self.logger.warning(
+                    "Certified by pin-and-verify: T_CAS,E=%.3f C, "
+                    "dCOP/dT_CAS,E=%.1e, COP=%.5f", T3 - 273.15, dual3, value(fs.cop))
+            else:
+                self._restore_values(failed_values)
+                self.logger.warning("Pin-and-verify failed")
 
         # Feasibility-based acceptance for a max_iter exit. IPOPT can reach
         # the right point and then fail to CERTIFY it: at R1234yf @ 45C the

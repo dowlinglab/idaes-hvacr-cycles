@@ -130,6 +130,10 @@ MAX_PRESSURE_RATIO = 20.0
 # Internal hot-evap/cold-cond approach inside the cascade HX itself --
 # distinct from COND_APPROACH_C (the hot loop's ambient-side approach).
 CASCADE_APPROACH_DT_C = 3.0
+# CO2 side of the cascade HX: subcooling floor 0 K (was SUBCOOL_C = 3) and
+# 1 K cold-end approach, so CO2 never leaves colder than T_CAS,E (10/10).
+SUBCOOL_COLD_C = 0.0
+CASCADE_COLD_END_DT_C = 1.0
 
 # DIAGNOSTIC: just the one problem point. (Real sweep script uses
 # np.arange(10, 46, 5) -- 10 through 45 in 5C steps.)
@@ -265,7 +269,7 @@ def _run_fluid(fluid_name, out_stem):
     # no ambient_temperature -- that belongs to the hot loop only.
     cold_kwargs = dict(
         evap_sat_temperature=EVAP_SAT_TARGET_C, superheating=SUPERHEAT_C,
-        superheating_max=SUPERHEAT_MAX_C, subcooling=SUBCOOL_C,
+        superheating_max=SUPERHEAT_MAX_C, subcooling=SUBCOOL_COLD_C,
         subcooling_max=SUBCOOL_MAX_C, max_pressure_ratio=MAX_PRESSURE_RATIO,
     )
     # Hot loop's spec dict base -- ambient_temperature gets added per-point
