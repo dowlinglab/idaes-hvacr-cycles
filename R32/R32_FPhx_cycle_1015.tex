@@ -1,0 +1,414 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage[margin=1in]{geometry}
+\newtheorem{remark}{Remark}
+\sisetup{detect-all}
+
+\title{R-32 Vapor-Compression Cycle on the IDAES Peng--Robinson Package:\\
+State Definition, Degrees of Freedom, Phase Selection and Results}
+\author{Shilpa Narasimhan}
+\date{October 15, 2026}
+
+\begin{document}
+\maketitle
+
+\section{Scope}
+This note documents how the single-stage R-32 cycle is set up and computed on
+the IDAES generic Peng--Robinson (PR) property package with the \texttt{FPhx}
+state definition, how its states are seeded and checked, and the results to
+date. The PR equation of state, the departure functions and the Shomate
+ideal-gas terms are as in \texttt{R32\_DVCT\_computations\_writeup.tex} and are
+not repeated here. Code: \texttt{vapor\_compression\_cubic\_FPhx\_1015.py},
+\texttt{closedform\_4methods\_1015.py}, \texttt{probe\_vle\_1015.py},
+\texttt{probe\_bound\_1015.py}, \texttt{run\_FPhx\_cycle\_1015.py},
+\texttt{sweep\_FPhx\_1015.py}.
+
+\section{Cycle Specification}
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+Evaporating temperature $T_e$ & \SI{-29}{\celsius} \\
+Condensing temperature $T_c$ & $T_{amb} + \SI{9}{\kelvin}$ \\
+Ambient temperatures $T_{amb}$ & \SIlist{10;15;20;25}{\celsius} \\
+Superheat $\Delta T_{SH}$ & \SI{3}{\kelvin} (window \SIrange{3}{8}{\kelvin}) \\
+Subcooling $\Delta T_{SC}$ & \SI{8}{\kelvin} (window \SIrange{3}{8}{\kelvin}) \\
+Compressor isentropic efficiency $\eta$ & 0.80 \\
+Refrigerant mass flow & \SI{1}{\kilo\gram\per\second} \\
+Expansion valve & isenthalpic \\
+\bottomrule
+\end{tabular}
+\caption{Operating specification (DVCT).}
+\end{table}
+
+\section{Property Methods}
+Three PR parameter sets are compared with the Helmholtz reference
+(CoolProp, Tillner-Roth and Yokozeki). The ideal-gas heat capacity is in Shomate form,
+$C_p^{ig} = A + Bt + Ct^2 + Dt^3 + E/t^2$, $t = T/\SI{1000}{\kelvin}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Method & $P_c$ [bar] & $T_c$ [K] & $\omega$ & $A$ & $B$ & $C$ & $D$ & $E$ \\
+\midrule
+NIST & 57.82 & 351.300 & 0.2769 & $-6.0987$ & 179.220 & $-122.368$ & 32.302 & 0.4914 \\
+GCGP (scaled) & 50.73 & 355.354 & 0.1711 & 14.161 & 124.0 & $-63.40$ & 11.90 & 0 \\
+SPGP (\texttt{fp\_single\_0919}) & 52.168 & 325.387 & 0.3523 & 32.6437 & 26.9797 & 591.354 & $-597.447$ & $-0.04746$ \\
+\bottomrule
+\end{tabular}
+\caption{PR parameters. GCGP coefficients converted to Shomate: $A=a$,
+$B=b\times10^3$, $C=c\times10^6$, $D=d\times10^9$, $E=e\times10^{-6}$.
+SPGP $\omega$ from $P^{sat}=\SI{1738.797}{mmHg}$ at $T_r=0.7$:
+$\omega = -1-\log_{10}(P^{sat}/P_c)$. IDAES uses $R=\SI{8.314462618}{\joule\per\mole\per\kelvin}$.}
+\end{table}
+
+\section{Phase-Specific Properties}
+At a given $(T,P)$ the PR cubic has either one admissible real root or three
+real roots. IDAES evaluates every property separately for each phase $p\in\{L,V\}$:
+the liquid phase takes the smallest root $Z_L$, the vapor phase the largest
+root $Z_V$. Outside the three-root region both phases receive the same root,
+so $h_L = h_V$ and $\phi_L = \phi_V$. For each phase,
+\begin{equation}
+h_p(T,P) = h^{ig}(T) + h^{dep}(T,P,Z_p), \qquad
+s_p(T,P) = s^{ig}(T,P) + s^{dep}(T,P,Z_p).
+\end{equation}
+The mixture properties of a state block are phase-fraction weighted,
+\begin{equation}\label{eq:mix}
+h = \beta_V\, h_V(T,P) + (1-\beta_V)\, h_L(T,P),
+\end{equation}
+where $\beta_V$ is the vapor fraction (\texttt{phase\_frac["Vap"]}).
+
+\subsection{Choosing the Physical Phase Without a Solver}
+For a pure component at fixed $(T,P)$ the stable phase is the one with the
+lower fugacity. Define
+\begin{equation}
+\Delta(T,P) = \ln\phi_L(T,P) - \ln\phi_V(T,P).
+\end{equation}
+$\Delta < 0$: liquid is stable. $\Delta > 0$: vapor is stable. $\Delta = 0$ with
+three roots: saturation. In code (\texttt{PRProbe}), $h_p$ and $s_p$ are read directly
+from the IDAES expressions \texttt{enth\_mol\_phase[p]} and
+\texttt{entr\_mol\_phase[p]} for the phase chosen by the sign of $\Delta$.
+No equation is solved, so a wrong root cannot be returned.
+
+\subsection{PR's Own Saturation Line}
+The saturation pressure and temperature are those of the PR model itself,
+\begin{equation}
+\Delta\big(T, P^{sat}_{PR}(T)\big) = 0,
+\end{equation}
+found by bisection. Outside the three-root window $\Delta$ is exactly zero, so
+the bracket is first located by scanning for a change of sign between
+\emph{nonzero} values of $\Delta$; a plain bisection drifted to $P_c$ for SPGP.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{4}{c}{$P^{sat}$ [kPa]} \\
+$T$ & Helmholtz & NIST & GCGP & SPGP \\
+\midrule
+\SI{-29}{\celsius} & 284.9 & 283.3 & 287.8 & 469.7 \\
+\SI{19}{\celsius} & 1434.2 & 1443.1 & 1291.3 & 2289.3 \\
+\SI{24}{\celsius} & 1644.8 & 1656.4 & 1467.7 & 2619.9 \\
+\SI{29}{\celsius} & 1878.0 & 1892.6 & 1661.2 & 2985.4 \\
+\SI{34}{\celsius} & 2135.3 & 2153.1 & 1873.1 & 3388.2 \\
+\bottomrule
+\end{tabular}
+\caption{Saturation pressures at the evaporating and condensing temperatures.}
+\end{table}
+
+\begin{remark}
+Because each method has its own saturation line, a state that is vapor in one
+method can be liquid in another. Helmholtz states therefore cannot be used to
+seed PR states directly: $T$ and $P$ transfer, but $h$ does not (different
+reference state) and the phase does not (e.g.\ SPGP's condensing pressure is
+\SI{60}{\percent} above Helmholtz's).
+\end{remark}
+
+\section{Closed-Form Cycle}\label{sec:closed}
+The reference COP for each PR method uses the same PR expressions as the
+IDAES model, but no flowsheet and no simultaneous solve.
+\begin{align}
+P_e &= P^{sat}_{PR}(T_e), \qquad P_c = P^{sat}_{PR}(T_{cond})\\
+\text{State 1 (evaporator outlet):}\quad
+T_1 &= T_e + \Delta T_{SH}, \quad h_1 = h_V(T_1,P_e),\quad s_1 = s_V(T_1,P_e)\\
+\text{State 2s (isentropic):}\quad
+&s_V(T_{2s},P_c) = s_1 \;\Rightarrow\; h_{2s} = h_V(T_{2s},P_c)\\
+\text{State 2 (compressor outlet):}\quad
+h_2 &= h_1 + \frac{h_{2s}-h_1}{\eta}\\
+\text{State 3 (condenser outlet):}\quad
+T_3 &= T_{cond} - \Delta T_{SC}, \quad h_3 = h_L(T_3,P_c)\\
+\text{State 4 (valve outlet):}\quad
+h_4 &= h_3\\
+\mathrm{COP} &= \frac{h_1 - h_4}{h_2 - h_1}
+\end{align}
+$T_{2s}$ and $T_2$ are found by bisection on the vapor branch. The Helmholtz
+COP uses the same steps with CoolProp. The Carnot limit is
+$\mathrm{COP}_{Carnot} = T_e/(T_{cond}-T_e)$ in kelvin.
+
+\begin{remark}
+This reference checks the flowsheet and the solver, not the PR parameters:
+both use the same PR equations. The check on the parameters is the
+comparison with Helmholtz.
+\end{remark}
+
+\begin{remark}
+The earlier closed form (\texttt{cop\_vs\_ambient\_closedform\_1014.py}) is
+not pure PR: its saturation pressure comes from a corresponding-states
+correlation, $\omega$ from interpolated Linde data, and $P_c = \SI{57.85}{bar}$.
+At $T_{amb}=\SI{20}{\celsius}$ it gives 2.6243 for NIST against 2.6149 here
+(\SI{0.36}{\percent}).
+\end{remark}
+
+\section{IDAES Flowsheet}
+\subsection{Units and State Definition}
+Four units in a closed loop: evaporator (\texttt{Heater}), compressor
+(\texttt{Compressor}, isentropic), condenser (\texttt{Heater}), expansion valve
+(\texttt{PressureChanger}, adiabatic, $\Delta P<0$). The property package is the
+generic PR package with the \texttt{FPhx} state definition:
+\begin{equation}
+\text{state variables} = \{F,\; x,\; P,\; h\}.
+\end{equation}
+Each arc therefore writes equalities on $F$, $x$, $P$ and $h$. Because
+$(P,h)$ determines the thermodynamic state of a pure fluid everywhere,
+including inside the dome, the stream leaving one unit is the stream entering
+the next.
+
+\begin{remark}
+Under \texttt{FTPx} the arcs carry $(F,x,T,P)$. For a pure fluid at saturation
+$T$ and $P$ are not independent, so the vapor fraction was not transmitted and
+the loop did not conserve energy (breadcrumb, 10/08). The Helmholtz model
+avoids this with \texttt{StateVars.TPX}, whose ``X'' is vapor fraction. In
+the generic package, ``x'' in \texttt{FTPx} is mole fraction, which is always
+1 for a pure fluid.
+\end{remark}
+
+\subsection{Degrees of Freedom}
+DOF is read from the built model with \texttt{degrees\_of\_freedom()}:
+\begin{table}[h]
+\centering
+\begin{tabular}{lr}
+\toprule
+Model state & DOF \\
+\midrule
+Units and arcs, nothing fixed & 5 \\
+Fix $F$, $x$, $P_e$, $P_c$, $\eta$, $T_1$, $T_3$ & $-2$ \\
+Deactivate one arc's $F$ and $x$ equalities (closed loop) & 0 \\
+Release $T_1$, $T_3$ (superheat, subcooling) & \textbf{2} \\
+\bottomrule
+\end{tabular}
+\end{table}
+In a closed loop every unit conserves flow and composition, so one arc's
+flow and composition equalities are implied by the other three; exactly those
+two are removed. Mass continuity is verified afterwards by
+\texttt{cycle\_guards}. The two remaining degrees of freedom are the
+evaporator and condenser outlet temperatures:
+\begin{equation}
+T_1 = T^{sat}_{PR}(P_e) + \Delta T_{SH}, \qquad
+T_3 = T^{sat}_{PR}(P_c) - \Delta T_{SC}.
+\end{equation}
+
+\section{The Pure-Component Phase Problem}
+\subsection{Observation}
+A single state block was solved at known states with $P$ and $h$ (or $T$ and
+$P$) fixed. Every combination of VLE formulation (\texttt{SmoothVLE},
+\texttt{CubicComplementarityVLE}) and state definition (\texttt{FTPx},
+\texttt{FPhx}) returned impossible states and reported them optimal, for
+example:
+\begin{table}[h]
+\centering
+\begin{tabular}{llllrrr}
+\toprule
+State & VLE & Def. & Start & $T$ [\si{\celsius}] & True $T$ & $\beta_V$ \\
+\midrule
+Vapor, $P=\SI{283.3}{kPa}$ & Smooth & FPhx & at truth & 50.43 & $-26.00$ & 0.729 \\
+Liquid, $P=\SI{1878}{kPa}$ & Smooth & FPhx & at truth & 17.30 & 21.00 & 0.027 \\
+Liquid, $P=\SI{1878}{kPa}$ & Smooth & FTPx & default & 21.00 & 21.00 & 0.278 \\
+Liquid, $P=\SI{1878}{kPa}$ & CubicCC & FPhx & default & 17.92 & 21.00 & 0.023 \\
+\bottomrule
+\end{tabular}
+\caption{Isolated state blocks, NIST. Started at the true state, the solver
+moves away from it.}
+\end{table}
+
+\subsection{Explanation}
+For a mixture, the liquid and vapor phases have different compositions, and
+the component balances fix $\beta_V$. For a pure component every composition
+is 1, so the component balances give no information about $\beta_V$. Away
+from saturation, $h_L \neq h_V$ at a given $T$ (three roots), and
+Eq.~\eqref{eq:mix} can be satisfied by a blend of the two roots at a
+\emph{wrong} temperature. The block's equations are square by count, but this
+family of solutions is not excluded. Physically, away from saturation
+$\beta_V$ must be exactly 0 or 1, and inside the dome $T$ must equal
+$T^{sat}$.
+
+\section{Remedy: Bounds}
+Bounds do not change the degrees of freedom.
+
+\subsection{Single-Phase Blocks}
+\begin{equation}
+\beta_V \ge 1-\varepsilon \;\;\text{(vapor blocks)}, \qquad
+\beta_V \le \varepsilon \;\;\text{(liquid blocks)}.
+\end{equation}
+Vapor: evaporator outlet, compressor inlet and outlet, condenser inlet,
+compressor isentropic block. Liquid: condenser outlet, valve inlet.
+$\varepsilon$ was chosen by measurement (\texttt{probe\_bound\_1015.py}, NIST,
+\texttt{SmoothVLE}, \texttt{FPhx}):
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+& \multicolumn{4}{c}{$|T - T_{true}|$ [K]} \\
+$\varepsilon$ & Vapor \SI{-26}{\celsius} & Liquid \SI{21}{\celsius} & Liquid \SI{26}{\celsius} & Liquid \SI{14}{\celsius} \\
+\midrule
+$10^{-3}$ & 0.320 & 0.089 & (infeasible) & 0.096 \\
+$10^{-4}$ & 0.034 & 0.009 & 0.008 & 0.010 \\
+$\mathbf{10^{-5}}$ & \textbf{0.004} & \textbf{0.001} & \textbf{0.001} & \textbf{0.001} \\
+$10^{-6}$ & 0.0003 & (infeasible) & (infeasible) & 0.0002 \\
+\bottomrule
+\end{tabular}
+\caption{The temperature error falls tenfold for each tenfold tightening of
+$\varepsilon$. $\varepsilon = 10^{-5}$ is the tightest value that solved
+every case. \texttt{CubicComplementarityVLE} with bounds was infeasible in
+every case.}
+\end{table}
+
+\subsection{Two-Phase Blocks}
+The valve outlet and evaporator inlet are two-phase. Their pressure is fixed
+($P_e$), so $T^{sat}_{PR}(P_e)$ is known in advance:
+\begin{equation}
+T^{sat}_{PR}(P_e) - \delta \le T \le T^{sat}_{PR}(P_e) + \delta, \qquad \delta = \SI{0.01}{\kelvin}.
+\end{equation}
+\begin{remark}
+$\delta$ has not been tested the way $\varepsilon$ was, and it is binding:
+the solved temperature sits at the upper edge, \SI{-28.99}{\celsius}.
+\end{remark}
+
+\section{Seeding}
+\begin{enumerate}
+\item Compute the closed-form states (Section~\ref{sec:closed}).
+\item Set $F$, $x$, $P$, $h$, $T$ and $\beta_V$ of every state block from those
+states, with the phase chosen by the sign of $\Delta$. Two-phase blocks get
+$T = T^{sat}_{PR}(P_e)$ and the lever-rule quality
+$\beta_V = (h_4 - h_L^{sat})/(h_V^{sat}-h_L^{sat})$.
+\item Apply the $\beta_V$ bounds.
+\item Solve each state block alone at fixed $(F,x,P,h)$.
+\item Apply the two-phase temperature bounds and solve the full flowsheet.
+\end{enumerate}
+Outlet state blocks carry a redundant $\sum x = 1$ equation, so step 4 is
+refused (``too few degrees of freedom'') on those blocks, which keep their
+step-2 values. IDAES's own state-block \texttt{initialize()} is not used: it
+ignores the bounds.
+
+\section{Checks Applied to Every Solved Cycle}
+\begin{enumerate}
+\item Carnot: $\mathrm{COP} \le T_e/(T_{cond}-T_e)$.
+\item Loop energy closure: $Q_{evap} + W_{comp} + Q_{cond} = 0$.
+\item Arc continuity of $h$ and $F$.
+\item Phase check on all eight state blocks: $\beta_V$ on the side of
+$T^{sat}_{PR}(P)$ that $T$ is on; two-phase allowed within \SI{0.05}{\kelvin} of it.
+\item COP against the closed form from the same PR equations.
+\end{enumerate}
+
+\section{Results}
+\subsection{IDAES PR Cycle, NIST, $T_{amb}=\SI{20}{\celsius}$}
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Block & $T$ [\si{\celsius}] & $T^{sat}_{PR}$ [\si{\celsius}] & $\beta_V$ & $h$ [\si{\joule\per\mole}] \\
+\midrule
+Evaporator inlet & $-28.99$ & $-29.00$ & 0.2525 & $-13338.6$ \\
+Evaporator outlet & $-26.00$ & $-29.00$ & 1.0000 & 1084.9 \\
+Compressor outlet & 114.30 & 29.00 & 1.0000 & 6600.8 \\
+Condenser outlet & 21.00 & 29.00 & 0.0000 & $-13338.6$ \\
+Valve outlet & $-28.99$ & $-29.00$ & 0.2525 & $-13338.6$ \\
+\bottomrule
+\end{tabular}
+\caption{DOF 0, IPOPT optimal. COP 2.6149, closed form 2.6149
+($\SI{-0.0001}{\percent}$), Carnot 4.2095, loop closure \SI{0.01}{W}. All
+checks pass. Reproduced on DOWLINGLAB-7.}
+\end{table}
+
+\subsection{Closed-Form COP, All Methods}
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrrr}
+\toprule
+$T_{amb}$ [\si{\celsius}] & Carnot & Helmholtz & NIST & GCGP & SPGP \\
+\midrule
+10 & 5.0865 & 3.3789 & 3.3540 & 3.4116 & 3.2058 \\
+15 & 4.6066 & 2.9805 & 2.9515 & 3.0063 & 2.7615 \\
+20 & 4.2095 & 2.6484 & 2.6149 & 2.6671 & 2.3818 \\
+25 & 3.8754 & 2.3667 & 2.3282 & 2.3779 & 2.0499 \\
+\midrule
+\multicolumn{2}{l}{vs.\ Helmholtz} & --- & $-0.7$ to $-1.6\,\%$ & $+0.5$ to $+1.0\,\%$ & $-5$ to $-13\,\%$ \\
+\bottomrule
+\end{tabular}
+\caption{$\Delta T_{SH}=\SI{3}{K}$, $\Delta T_{SC}=\SI{8}{K}$, $\eta=0.80$.
+All below Carnot; all decrease monotonically with ambient. The Helmholtz
+column matches the IDAES Helmholtz model maximised over superheat and
+subcooling (\texttt{sweep\_helmholtz\_maximized\_1015.csv}), which lands at
+$\Delta T_{SH}=\SI{3}{K}$, $\Delta T_{SC}=\SI{8}{K}$.}
+\end{table}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrr}
+\toprule
+$T_{amb}$ [\si{\celsius}] & Helmholtz & NIST & GCGP & SPGP \\
+\midrule
+10 & 85.5 & 92.7 & 76.8 & 44.7 \\
+15 & 96.0 & 103.6 & 86.3 & 51.3 \\
+20 & 106.3 & 114.3 & 95.6 & 57.9 \\
+25 & 116.4 & 124.8 & 104.7 & 64.4 \\
+\bottomrule
+\end{tabular}
+\caption{Compressor discharge temperature [\si{\celsius}], closed form.}
+\end{table}
+
+\subsection{IDAES PR Sweep, Superheat and Subcooling Fixed}
+\begin{table}[h]
+\centering
+\begin{tabular}{llrrrrcc}
+\toprule
+Method & $T_{amb}$ & IPOPT & COP & Closed form & Diff [\%] & Phases & Guards \\
+\midrule
+NIST & 10 & infeasible & 3.3540 & 3.3540 & $-0.0003$ & ok & ok \\
+NIST & 15 & infeasible & 2.9515 & 2.9515 & $-0.0003$ & ok & ok \\
+NIST & 20 & optimal & 2.6149 & 2.6149 & $-0.0001$ & ok & ok \\
+NIST & 25 & optimal & 2.3282 & 2.3282 & $-0.0002$ & ok & ok \\
+GCGP & 10 & optimal & 3.4116 & 3.4116 & $-0.0002$ & ok & ok \\
+GCGP & 15 & optimal & 3.0063 & 3.0063 & $-0.0003$ & ok & ok \\
+GCGP & 20 & optimal & 2.6671 & 2.6671 & $-0.0003$ & ok & ok \\
+GCGP & 25 & optimal & 2.3779 & 2.3779 & $-0.0003$ & ok & ok \\
+SPGP & 10 & infeasible & 3.2057 & 3.2058 & $-0.0007$ & ok & ok \\
+SPGP & 15 & optimal & 2.7615 & 2.7615 & $-0.0007$ & ok & ok \\
+SPGP & 20 & infeasible & 2.3818 & 2.3818 & $-0.0008$ & ok & ok \\
+SPGP & 25 & infeasible & 2.0499 & 2.0499 & $-0.0008$ & ok & ok \\
+\bottomrule
+\end{tabular}
+\caption{\texttt{sweep\_FPhx\_1015.py square}, DOWLINGLAB-7, \texttt{myidaesenv}.
+$\Delta T_{SH}=\SI{3}{K}$, $\Delta T_{SC}=\SI{8}{K}$, DOF 0, loop closure
+$\le \SI{0.02}{W}$ in every case. Five of twelve points end ``infeasible''
+while matching the closed form to within \SI{0.001}{\percent} and passing every check.}
+\end{table}
+
+\section{Open Items}
+\begin{enumerate}
+\item Five ``infeasible'' points in the square sweep: the unsatisfied
+equations and their residuals have not yet been examined. Suspect: a bound
+fighting an equation (the two-phase $\delta$ is already binding at
+\SI{20}{\celsius}).
+\item Sweep with superheat and subcooling free (\texttt{sweep\_FPhx\_1015.py optimize}).
+\item Test the two-phase temperature bound $\delta$ as $\varepsilon$ was tested.
+\item Seeding: deactivate the redundant $\sum x=1$ on outlet blocks during
+step 4, and apply the two-phase bound before step 4.
+\end{enumerate}
+
+\end{document}

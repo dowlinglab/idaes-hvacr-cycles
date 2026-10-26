@@ -14,3 +14,11 @@ optimization_landscape*.py
 *.xlsx
 *.png
 *.csv
+
+# Generated figures in vector form -- same reason as *.png/*.csv/*.xlsx above:
+# regenerable from the plotting scripts, and binary diffs are noise.
+*.pdf
+
+# Machine-specific launchers: these hardcode an absolute interpreter path on
+# DOWLINGLAB-7 and will not run anywhere else.
+*.command

@@ -1,5 +1,15 @@
 # Personal working notes -- not for the shared repo (Task #27)
-R32/BREADCRUMB_07-20.md
+# Breadcrumbs are local-only, all of them, wherever they live.
+BREADCRUMB*.md
+**/BREADCRUMB*.md
+# CLAUDE.md is the per-session pointer at the breadcrumb; also local-only.
+CLAUDE.md
+**/CLAUDE.md
+# WORKING_STYLE.md is personal working preferences, not project documentation.
+WORKING_STYLE.md
+**/WORKING_STYLE.md
+# Dated status notes: snapshots of work in progress, superseded as work moves on.
+R32/R1234zeZ_STATUS_2026-10-08.md
 R32/SLIDE_DECK_BACKUP_2026-08-19.md
 R32/practice_shammah_uncertainty_prop.py
 R32/R32_IDAES_fluid_registration_algorithm.md
